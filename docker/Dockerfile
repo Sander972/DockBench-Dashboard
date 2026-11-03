@@ -10,6 +10,10 @@ COPY . .
 RUN bun run build
 
 FROM oven/bun:1-slim
+# Overrides the labels inherited from oven/bun: GHCR links the package to the repo in `source` and shows `description` on the package page.
+LABEL org.opencontainers.image.source=https://github.com/Sander972/DockBench-Dashboard \
+      org.opencontainers.image.description="Web dashboard to deploy and monitor DockBench dev containers" \
+      org.opencontainers.image.licenses=MIT
 WORKDIR /app
 COPY --from=build /app/dist ./dist
 COPY server ./server
