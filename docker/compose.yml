@@ -1,0 +1,31 @@
+services:
+  dashboard:
+    image: ghcr.io/sander972/dockbench-dashboard:latest
+    container_name: dockbench-dashboard
+    environment:
+      PUBLIC_URL: ${PUBLIC_URL}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+      GITHUB_LOGIN: ${GITHUB_LOGIN}
+      SESSION_SECRET: ${SESSION_SECRET}
+      TOTP_SECRET: ${TOTP_SECRET}
+      PORTAINER_URL: ${PORTAINER_URL}
+      PORTAINER_API_KEY: ${PORTAINER_API_KEY}
+      PORTAINER_ENDPOINT_ID: ${PORTAINER_ENDPOINT_ID}
+      DOCKBENCH_IMAGE: ${DOCKBENCH_IMAGE:-ghcr.io/sander972/dockbench:latest}
+    volumes:
+      - data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - devnet
+      - proxy
+    restart: unless-stopped
+
+volumes:
+  data:
+
+networks:
+  devnet:
+    external: true
+  proxy:
+    external: true

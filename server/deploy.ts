@@ -1,0 +1,123 @@
+import type { ContainerRow } from './docker'
+import { HttpError } from './http'
+import type { ApiCall } from './store'
+
+export const PROJECT_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
+export const REPO_RE = /^[\w.-]+\/[\w.-]+$/
+
+// Subset of DeployRequest in src/types.ts that the server uses. `auth` and `token` are accepted and ignored: the container gets its own deploy key for the repo, or with ghLogin signs in to gh itself.
+export interface DeployInput {
+  repo: string
+  project: string
+  gitUserName: string
+  gitUserEmail: string
+  image: string
+  installClaude: boolean // absent means true, like INSTALL_CLAUDE in the image
+  injectClaudeConfig: boolean // the repo comes from Settings, never from the request
+  setupRerun: boolean // SETUP_RERUN=1: .devcontainer/setup.sh on every start, not only on a new container
+  vscodeConfig: boolean // absent means true, like VSCODE_CONFIG in the image; the settings come from Settings
+  ghLogin: boolean // no deploy key: empty SSH_KEY and an https REPO_URL, so the image runs the gh device login (account-wide access, for multi-repo workspaces)
+}
+
+export function validateDeploy(body: unknown, defaultImage: string): { ok: true; value: DeployInput } | { ok: false; error: string } {
+  const b = (body ?? {}) as Record<string, unknown>
+  const s = (k: string) => (typeof b[k] === 'string' ? (b[k] as string).trim() : '')
+  const value = { repo: s('repo'), project: s('project'), gitUserName: s('gitUserName'), gitUserEmail: s('gitUserEmail'), image: s('image') || defaultImage, installClaude: b.installClaude !== false, injectClaudeConfig: b.injectClaudeConfig === true, setupRerun: b.setupRerun === true, vscodeConfig: b.vscodeConfig !== false, ghLogin: b.ghLogin === true }
+  if (!REPO_RE.test(value.repo)) return { ok: false, error: 'repo must be owner/name' }
+  if (!value.project) return { ok: false, error: 'project is required' }
+  if (value.project.length > 20) return { ok: false, error: 'project must be at most 20 characters' }
+  if (!PROJECT_RE.test(value.project)) return { ok: false, error: 'project must match ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$' }
+  if (value.project === 'telegram') return { ok: false, error: 'project telegram is taken by the Telegram bot' }
+  if (!value.gitUserName) return { ok: false, error: 'gitUserName is required' }
+  if (!value.gitUserEmail.includes('@')) return { ok: false, error: 'gitUserEmail must be an email' }
+  if (/\s/.test(value.image)) return { ok: false, error: 'image must not contain spaces' }
+  return { ok: true, value }
+}
+
+export interface DeployDeps {
+  listContainers: () => Promise<ContainerRow[]>
+  findStack: (name: string) => Promise<{ Id: number } | null>
+  pullImage: () => Promise<void>
+  // the workspace repo's key; absent with ghLogin, where the container signs in to gh instead
+  createDeployKey?: () => Promise<{ id: number }>
+  deleteDeployKey?: (id: number) => Promise<void>
+  // the read-only key on the Claude config repo, called only when deploy gets a configRepo
+  createConfigKey?: () => Promise<{ id: number }>
+  deleteConfigKey?: (id: number) => Promise<void>
+  createStack: (name: string) => Promise<{ Id: number }>
+  sleep?: (ms: number) => Promise<void>
+}
+
+// Same shape as DeployResult in src/api/index.ts. `id` is the new container id, or '' when it had not appeared within 10 seconds.
+export interface DeployResult {
+  id: string
+  name: string
+  calls: ApiCall[]
+}
+
+export class DeployFailure extends Error {
+  status: number
+  calls: ApiCall[]
+  constructor(status: number, message: string, calls: ApiCall[]) {
+    super(message)
+    this.status = status
+    this.calls = calls
+  }
+}
+
+// ponytail: statuses are the expected success codes, the real upstream code is not threaded back; a step that throws leaves its status null
+export async function deploy(project: string, repo: string, deps: DeployDeps, configRepo = ''): Promise<DeployResult> {
+  const name = `dockbench-${project}`
+  const calls: ApiCall[] = []
+  const step = async <T>(method: string, path: string, okStatus: number, run: () => Promise<T>): Promise<T> => {
+    const call: ApiCall = { method, path, status: null }
+    calls.push(call)
+    try {
+      const out = await run()
+      call.status = okStatus
+      return out
+    } catch (e) {
+      throw e instanceof HttpError ? new DeployFailure(e.status, e.message, calls) : new DeployFailure(502, (e as Error).message, calls)
+    }
+  }
+  const existing = await step('GET', '/containers/json', 200, deps.listContainers)
+  if (existing.some((c) => c.name === name)) throw new DeployFailure(409, `Container ${name} already exists`, calls)
+  if (await step('GET', '/api/stacks', 200, () => deps.findStack(name))) throw new DeployFailure(409, `Stack ${name} already exists`, calls)
+  await step('POST', '/images/create', 200, deps.pullImage)
+  const key = deps.createDeployKey ? await step('POST', `/repos/${repo}/keys`, 201, deps.createDeployKey) : null
+  // best effort: the error that got us here is what the user needs to see
+  const unkey = async (r: string, id: number, del: (id: number) => Promise<void>) => {
+    const call: ApiCall = { method: 'DELETE', path: `/repos/${r}/keys/${id}`, status: null }
+    calls.push(call)
+    await del(id).then(() => { call.status = 204 }, () => {})
+  }
+  let configKey: { id: number } | null = null
+  if (configRepo) {
+    try {
+      configKey = await step('POST', `/repos/${configRepo}/keys`, 201, deps.createConfigKey!)
+    } catch (e) {
+      if (key) await unkey(repo, key.id, deps.deleteDeployKey!)
+      throw e
+    }
+  }
+  try {
+    await step('POST', '/api/stacks/create/standalone/string', 200, () => deps.createStack(name))
+  } catch (e) {
+    // the keys must not outlive a stack that was never created. A failed response can still mean a created stack whose container clones with these keys, so they go only when Portainer confirms there is no stack.
+    const check: ApiCall = { method: 'GET', path: '/api/stacks', status: null }
+    calls.push(check)
+    const stack = await deps.findStack(name).then((s) => { check.status = 200; return s }, () => undefined)
+    if (stack === null) {
+      if (key) await unkey(repo, key.id, deps.deleteDeployKey!)
+      if (configKey) await unkey(configRepo, configKey.id, deps.deleteConfigKey!)
+    }
+    throw e
+  }
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  let id = ''
+  for (let i = 0; i < 10 && !id; i++) {
+    id = (await step('GET', '/containers/json', 200, deps.listContainers)).find((c) => c.name === name)?.id ?? ''
+    if (!id) await sleep(1000)
+  }
+  return { id, name, calls }
+}

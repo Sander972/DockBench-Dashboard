@@ -1,0 +1,9 @@
+.git
+.github
+README.md
+docker
+.env*
+node_modules
+dist
+.data
+server/*.test.ts

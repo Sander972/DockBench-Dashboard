@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#e7e6e2" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#11100e" media="(prefers-color-scheme: dark)" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="DockBench" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <title>DockBench Dashboard</title>
+    <!-- Paint the ground in the saved theme before the app CSS and Vue load, so there is no flash. -->
+    <script>try { var t = JSON.parse(localStorage.getItem('dockbench.prefs')).theme; if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t) } catch (e) {}</script>
+    <style>html{background:oklch(0.925 0.006 95)}@media (prefers-color-scheme:dark){html:not([data-theme="light"]){background:oklch(0.175 0.006 95)}}html[data-theme="dark"]{background:oklch(0.175 0.006 95)}</style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
