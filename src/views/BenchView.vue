@@ -89,7 +89,7 @@ function clearSearch() { q.value = ''; search.value?.focus() }
         <label class="sort"><span class="sr">Sort by</span><select id="sortSel" v-model="sort" @change="onSort"><option v-for="[v, l] in SORTS" :key="v" :value="v">{{ l }}</option></select></label>
       </div>
       <div id="listBody">
-        <ul v-if="store.loading" class="list plate" aria-busy="true" aria-label="Loading containers">
+        <ul v-if="store.loading" class="list cards" aria-busy="true" aria-label="Loading containers">
           <li v-for="i in 6" :key="i" class="row"><div class="hit" aria-hidden="true">
             <span class="led" style="opacity:.4"></span><span class="rh"><span class="sk" :style="{ width: 50 + (i - 1) * 7 % 30 + '%', height: '14px' }"></span><span class="sk" style="width:52px"></span></span>
             <span class="meta"><span class="sk" :style="{ display: 'block', width: 40 + (i - 1) * 11 % 35 + '%' }"></span></span>
@@ -99,7 +99,7 @@ function clearSearch() { q.value = ''; search.value?.focus() }
         <div v-else-if="empty && store.dockerDown" class="plate empty"><h3>Can't load containers</h3><p class="fine">Docker isn't answering yet. The list fills in on the first good poll.</p></div>
         <div v-else-if="empty" class="plate empty"><h3>No dev containers on devnet</h3>
           <p class="fine">Deploy a DockBench stack in Portainer. Anything with the label <code>dockbench=true</code> on <code>devnet</code> shows up here on the next poll, running or stopped.</p></div>
-        <ul v-else-if="rows.length" class="list plate">
+        <ul v-else-if="rows.length" class="list cards">
           <component :is="prefs.compact ? CompactRow : ContainerRow" v-for="c in rows" :key="c.id" :c="c" :sel="c.id === id" @select="pick(c.id)" />
         </ul>
         <div v-else-if="prefs.compact && !q.trim()" class="plate empty"><h3>No running containers</h3><p class="fine">Compact view lists running containers only. Turn it off in Settings to see the rest.</p></div>
