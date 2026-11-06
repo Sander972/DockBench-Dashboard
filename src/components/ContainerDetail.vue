@@ -15,8 +15,9 @@ import ExecPanel from './ExecPanel.vue'
 import HoldButton from './HoldButton.vue'
 import Led from './Led.vue'
 import Meter from './Meter.vue'
-import Sparkline from './Sparkline.vue'
 import StepUpPanel from './StepUpPanel.vue'
+import TrendChart from './TrendChart.vue'
+import { actionsUrl } from '../lib/actions'
 
 const props = defineProps<{ id: string }>()
 const emit = defineEmits<{ back: [] }>()
@@ -81,14 +82,18 @@ const switching = computed(() => store.claudeLogin[props.id]?.phase === 'startin
 const sync = computed(() => st.value?.claude_plugin_sync)
 const showCode = computed(() => !!c.value?.deviceCode && (c.value.statusError === 'starting' || st.value?.tunnel === 'waiting_for_login'))
 
-// sparkline readout: the hovered sample, or the newest one
-const hover = ref<{ cpu: number | null; mem: number | null }>({ cpu: null, mem: null })
-function read(m: 'cpu' | 'mem') {
-  const a = hist.value[m], i = hover.value[m] ?? a.length - 1, x = a[i] ?? 0
-  // polls are not evenly spaced (action follow-ups, hidden tab), so the age comes from the sample's own time
-  const when = i < a.length - 1 ? ago(hist.value.t[i], now.value) : 'now'
-  return m === 'cpu' ? `${x.toFixed(1)}% · ${((x / 100) * ncpu.value).toFixed(1)} of ${ncpu.value} cores · ${when}` : `${gib(toGiB(x))} of ${gib(toGiB(c.value!.memLimit))} GiB · ${when}`
-}
+// git in three lines: what changed locally, then how it stands against the upstream
+const changes = computed(() => {
+  const d = st.value?.dirty
+  return d === 0 ? 'Clean' : d == null ? 'Changes unknown' : `${d} file${d > 1 ? 's' : ''} changed`
+})
+const upstream = computed(() => {
+  const s = st.value
+  if (!s) return ''
+  if (s.branch === 'HEAD') return 'no upstream while detached'
+  if (s.ahead == null) return 'no upstream branch'
+  return `${s.ahead} ahead, ${s.behind} behind`
+})
 
 // log lines: device codes marked, errors red, the VS Code banner muted
 const lines = computed(() => (store.logs[props.id] ?? []).slice(-100).map(l => ({
@@ -114,6 +119,18 @@ const ccCf = computed(() => (store.confirm?.target === 'claudecfg-' + props.id ?
 const cd = computed(() => store.claudeDiff[props.id])
 const cdRows = computed(() => diffRows(cd.value?.data?.diff ?? ''))
 const cdFiles = computed(() => cdRows.value.filter(r => r.kind === 'file').length)
+// one-line summaries for the closed Claude config and VS Code settings rows
+const cdSum = computed(() => {
+  if (!run.value) return 'Container stopped'
+  if (cd.value?.data) return cdFiles.value ? `${cdFiles.value} file${cdFiles.value > 1 ? 's' : ''} changed since ${cd.value.data.commit}` : `Same as ${cd.value.data.commit}`
+  return cd.value?.busy ? 'Loading…' : cd.value?.error ? 'Could not read the changes' : 'Not read yet'
+})
+const vsSum = computed(() => {
+  const s = vs.value?.settings
+  if (!run.value) return 'Container stopped'
+  if (s) return `${s.split('\n').length} lines`
+  return vs.value?.busy === 'load' ? 'Loading…' : !vs.value ? 'Not read yet' : s === undefined ? 'Could not read them' : s === '' ? 'Empty file' : 'None'
+})
 // read again on every start and once /status answers: the entrypoint seeds the file right after the status server comes up
 watch(() => run.value && c.value!.statusError !== 'starting' && `${props.id}|${c.value!.startedAt}`, k => { if (k) loadVscode(props.id) }, { immediate: true })
 // the entrypoint downloads the config before the status server starts, so the same moment works
@@ -138,15 +155,23 @@ onUpdated(() => {
     <button type="button" class="ibtn back" @click="emit('back')"><AppIcon name="back" /><span>All containers</span></button>
     <div v-if="!c || !v" class="placeholder plate">{{ store.loading ? 'Loading…' : 'This container is gone. It may have been removed.' }}</div>
     <template v-else>
-      <div class="d-head">
-        <Led :sev="v.sev" :blink="v.blink" />
-        <h2 tabindex="-1"><span class="pre">dockbench-</span>{{ c.name.replace(/^dockbench-/, '') }}</h2>
-        <div class="d-sub">
-          <span class="state" :class="'s-' + v.sev">{{ v.word }}</span>
-          <span v-if="run">up {{ since(c.startedAt, now) }}</span>
-          <span v-else-if="c.state === 'exited'">stopped {{ ago(c.finishedAt ?? c.startedAt, now) }}</span>
-          <span v-else><span class="num">{{ c.restartCount }}</span> restarts</span>
+      <div class="d-top">
+        <div class="d-head">
+          <Led :sev="v.sev" :blink="v.blink" />
+          <h2 tabindex="-1"><span class="pre">dockbench-</span>{{ c.name.replace(/^dockbench-/, '') }}</h2>
+          <div class="d-sub">
+            <span class="state" :class="'s-' + v.sev">{{ v.word }}</span>
+            <span v-if="run">up {{ since(c.startedAt, now) }}</span>
+            <span v-else-if="c.state === 'exited'">stopped {{ ago(c.finishedAt ?? c.startedAt, now) }}</span>
+            <span v-else><span class="num">{{ c.restartCount }}</span> restarts</span>
+          </div>
         </div>
+        <div class="open btns">
+          <a class="btn sm pri" :href="web" target="_blank" rel="noopener noreferrer" :aria-disabled="canOpen ? undefined : 'true'" :tabindex="canOpen ? undefined : -1">Open in vscode.dev <AppIcon name="ext" /></a>
+          <a class="btn sm" :href="desk" :aria-disabled="canOpen ? undefined : 'true'" :tabindex="canOpen ? undefined : -1">VS Code desktop <AppIcon name="ext" /></a>
+          <a v-if="wsf" class="btn sm" :href="wsDesk" :aria-disabled="canOpen ? undefined : 'true'" :tabindex="canOpen ? undefined : -1" :title="wsf">Workspace in desktop <AppIcon name="ext" /></a>
+        </div>
+        <p class="fine d-note">{{ openReason }}</p>
       </div>
 
       <div v-if="store.dockerDown" class="callout bad"><h3><Led sev="bad" />Docker unreachable</h3><p><template v-if="store.lastGoodAt">Values below are from {{ ago(store.lastGoodAt, now) }}. </template>Actions are paused.</p></div>
@@ -160,153 +185,167 @@ onUpdated(() => {
       </div>
       <ClaudeLoginCallout v-if="showClaude" :id="c.id" />
 
-      <div class="open">
-        <div class="btns">
-          <a class="btn pri" :href="web" target="_blank" rel="noopener noreferrer" :aria-disabled="canOpen ? undefined : 'true'" :tabindex="canOpen ? undefined : -1">Open in vscode.dev <AppIcon name="ext" /></a>
-          <a class="btn" :href="desk" :aria-disabled="canOpen ? undefined : 'true'" :tabindex="canOpen ? undefined : -1">VS Code desktop <AppIcon name="ext" /></a>
-          <a v-if="wsf" class="btn" :href="wsDesk" :aria-disabled="canOpen ? undefined : 'true'" :tabindex="canOpen ? undefined : -1" :title="wsf">Workspace in desktop <AppIcon name="ext" /></a>
-        </div>
-        <p class="fine">{{ openReason }}</p>
-      </div>
-
       <div class="plate panel">
         <section class="sec" :aria-labelledby="'r-' + c.id">
           <div class="sec-h"><h3 :id="'r-' + c.id" class="lbl">Resources</h3><span class="src-note">Docker stats · every {{ prefs.poll }}s</span></div>
-          <div v-if="run" class="chs">
-            <div class="ch">
-              <div class="ch-top"><span class="lbl">CPU</span><span class="num big">{{ cpuPct(c).toFixed(1) }}%</span></div>
-              <Meter :pct="cpuPct(c)" label="CPU" size="lg" />
-              <Sparkline :samples="hist.cpu" :max="100" @hover="i => (hover.cpu = i)" />
-              <span class="ch-foot num">{{ read('cpu') }}</span>
-            </div>
-            <div class="ch">
-              <div class="ch-top"><span class="lbl">RAM</span><span class="num big">{{ memPct(c).toFixed(0) }}%</span></div>
-              <Meter :pct="memPct(c)" label="Memory" size="lg" />
-              <Sparkline :samples="hist.mem" :max="c.memLimit" @hover="i => (hover.mem = i)" />
-              <span class="ch-foot num">{{ read('mem') }}</span>
-            </div>
-          </div>
-          <p v-else class="fine">Docker reports no CPU or memory for a {{ c.state === 'exited' ? 'stopped' : c.state }} container.</p>
-          <div class="ch">
-            <div class="ch-top"><span class="lbl">Disk</span><span class="num big">{{ gib(toGiB(diskBytes(c))) }} GiB</span></div>
-            <Meter :pct="diskPct(c)" label="Disk" size="lg" />
-            <div class="disk-break"><span>Writable layer</span><span class="num">{{ gib(toGiB(c.diskRw)) }} GiB</span><span>/home/dev volume</span><span class="num">{{ gib(toGiB(c.diskVolume)) }} GiB</span><span>Budget</span><span class="num">{{ toGiB(DISK_BUDGET) }} GiB</span></div>
-          </div>
-        </section>
-
-        <section v-if="st" class="sec" :aria-labelledby="'g-' + c.id">
-          <div class="sec-h"><h3 :id="'g-' + c.id" class="lbl">Git</h3><span class="src-note">{{ fresh ? '/status · just now' : 'last answer from /status' }}</span></div>
-          <dl class="facts">
-            <dt>Repo</dt><dd><a v-if="st.repo" :href="repoUrl(st.repo)!" target="_blank" rel="noopener noreferrer">{{ repoLabel(st.repo) }}</a><span v-else class="dim">REPO_URL is not set</span></dd>
-            <dt>Branch</dt><dd class="num">{{ st.branch === 'HEAD' ? 'detached HEAD' : st.branch ?? 'Not a git repo' }}</dd>
-            <dt>Changes</dt><dd><template v-if="st.dirty === 0">Clean</template><template v-else-if="st.dirty == null">Unknown</template><template v-else><span class="num">{{ st.dirty }}</span> files modified, staged or untracked</template></dd>
-            <dt>Upstream</dt>
-            <dd>
-              <template v-if="st.branch === 'HEAD'">None while detached</template>
-              <template v-else-if="st.ahead == null">No upstream branch</template>
-              <template v-else><span class="num">{{ st.ahead }}</span> ahead, <span class="num">{{ st.behind }}</span> behind<br><span class="fine">as of the last fetch<template v-if="c.lastFetchAt">, {{ ago(c.lastFetchAt, now) }}</template></span></template>
-            </dd>
-            <dt>Last commit</dt>
-            <dd><template v-if="st.last_commit"><span class="num">{{ st.last_commit.sha }}</span> {{ st.last_commit.message }}<br><span class="fine">{{ ago(st.last_commit.date, now) }}</span></template><template v-else>No commits</template></dd>
-          </dl>
-          <StepUpPanel v-if="cf?.action === 'pull'" data-hold="pull" action="pull" :name="c.name" :waiting="cf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-          <div v-else class="btns">
-            <button type="button" class="btn" :aria-disabled="!fresh || busy || undefined" @click="fresh && !busy && gitExec(c.id, 'fetch')">{{ exec?.running && exec.kind === 'fetch' ? 'Fetching…' : 'Fetch' }}</button>
-            <HoldButton data-hold="pull" :disabled="!fresh || busy" :aria-describedby="'hold-hint-' + c.id" @confirm="gitExec(c.id, 'pull')" @early="early">{{ exec?.running && exec.kind === 'pull' ? 'Pulling…' : 'Hold to pull' }}</HoldButton>
-          </div>
-          <ExecPanel v-if="exec" :x="exec" />
-        </section>
-
-        <section v-if="store.ci[c.name]" class="sec" :aria-labelledby="'ci-' + c.id">
-          <div class="sec-h"><h3 :id="'ci-' + c.id" class="lbl">CI · GitHub Actions</h3><span class="src-note">{{ store.ci[c.name].repo }} · every 30s</span></div>
-          <CiRuns :a="store.ci[c.name]" />
-        </section>
-
-        <section v-if="st" class="sec" :aria-labelledby="'e-' + c.id">
-          <div class="sec-h"><h3 :id="'e-' + c.id" class="lbl">Environment</h3><span class="src-note">/status</span></div>
-          <dl class="facts">
-            <dt>Tools</dt><dd><span v-if="Object.keys(st.mise).length" class="tags"><span v-for="(ver, k) in st.mise" :key="k" class="tag">{{ k }} {{ ver }}</span></span><span v-else class="dim">No .mise.toml</span></dd>
-            <dt>Claude Code</dt>
-            <dd>{{ st.claude_installed === false ? 'Not installed' : st.claude_logged_in ? 'Credentials present' : 'Not signed in' }}<span v-if="st.claude_installed !== false && st.claude_version" class="num"> · {{ st.claude_version }}</span>
-              <button v-if="run && st.claude_installed !== false && st.claude_logged_in" type="button" class="btn sm" :aria-disabled="switching || undefined" :title="'Sign Claude Code out of ' + c.name + ' and start a new sign-in'" @click="!switching && switchClaudeAccount(c.id)">{{ switching ? 'Signing out…' : 'Switch account' }}</button>
-            </dd>
-            <template v-if="st.claude_plugins && st.claude_installed !== false">
-              <dt>Claude plugins</dt>
-              <dd><span v-if="Object.keys(st.claude_plugins).length" class="tags"><span v-for="(ver, k) in st.claude_plugins" :key="k" class="tag" :title="k">{{ k.split('@')[0] }}{{ ver ? ' ' + ver.slice(0, 12) : '' }}</span></span><span v-else class="dim">None installed</span>
-                <template v-if="sync"><br><span v-if="sync.state === 'running'" class="fine">Installing and updating, started {{ ago(sync.at, now) }}</span><span v-else-if="sync.warnings.length" class="fine s-warn">Last sync {{ ago(sync.at, now) }}: {{ sync.warnings.join('; ') }}</span><span v-else class="fine">Synced with settings.json {{ ago(sync.at, now) }}</span></template>
-              </dd>
+          <div class="vitals">
+            <template v-if="run">
+              <div class="vital">
+                <div class="v-top"><span class="lbl">CPU</span><span class="num big">{{ cpuPct(c).toFixed(1) }}%</span></div>
+                <Meter :pct="cpuPct(c)" label="CPU" size="lg" />
+                <span class="v-sub num">{{ ((cpuPct(c) / 100) * ncpu).toFixed(1) }} of {{ ncpu }} cores</span>
+              </div>
+              <div class="vital">
+                <div class="v-top"><span class="lbl">RAM</span><span class="num big">{{ memPct(c).toFixed(0) }}%</span></div>
+                <Meter :pct="memPct(c)" label="Memory" size="lg" />
+                <span class="v-sub num">{{ gib(toGiB(c.memUsed)) }} of {{ gib(toGiB(c.memLimit)) }} GiB</span>
+              </div>
             </template>
-            <dt>Status server</dt>
-            <dd><template v-if="fresh">up {{ dur(st.uptime_seconds + (now - ms(c.statusFetchedAt ?? now)) / 1000) }} <span class="fine">(starts after setup, so it trails the container)</span></template><span v-else class="s-bad">not answering</span></dd>
-          </dl>
+            <div class="vital disk">
+              <div class="v-top"><span class="lbl">Disk</span><span class="num big">{{ gib(toGiB(diskBytes(c))) }} GiB</span></div>
+              <Meter :pct="diskPct(c)" label="Disk" size="lg" />
+              <span class="v-sub num" :title="`Writable layer ${gib(toGiB(c.diskRw))} GiB, /home/dev volume ${gib(toGiB(c.diskVolume))} GiB, budget ${toGiB(DISK_BUDGET)} GiB`">{{ gib(toGiB(c.diskRw)) }} layer + {{ gib(toGiB(c.diskVolume)) }} home of {{ toGiB(DISK_BUDGET) }}</span>
+            </div>
+          </div>
+          <TrendChart v-if="run" :t="hist.t" :cpu="hist.cpu" :mem="hist.mem" />
+          <p v-else class="fine">Docker reports no CPU or memory for a {{ c.state === 'exited' ? 'stopped' : c.state }} container.</p>
         </section>
+
+        <div v-if="st || store.ci[c.name]" class="duo">
+          <section v-if="st" class="sec" :aria-labelledby="'g-' + c.id">
+            <div class="sec-h"><h3 :id="'g-' + c.id" class="lbl">Git</h3><span class="src-note">{{ fresh ? '/status · just now' : 'last answer from /status' }}</span></div>
+            <div class="lines">
+              <p><a v-if="st.repo" :href="repoUrl(st.repo)!" target="_blank" rel="noopener noreferrer">{{ repoLabel(st.repo) }}</a><span v-else class="dim">REPO_URL is not set</span> · <span class="num">{{ st.branch === 'HEAD' ? 'detached HEAD' : st.branch ?? 'Not a git repo' }}</span></p>
+              <p>{{ changes }} · {{ upstream }}<span v-if="st.ahead != null" class="dim"> · {{ c.lastFetchAt ? `fetched ${ago(c.lastFetchAt, now)}` : 'as of the last fetch' }}</span></p>
+              <p v-if="st.last_commit"><span class="num">{{ st.last_commit.sha }}</span> {{ st.last_commit.message }} <span class="dim">· {{ ago(st.last_commit.date, now) }}</span></p>
+              <p v-else class="dim">No commits</p>
+            </div>
+            <StepUpPanel v-if="cf?.action === 'pull'" data-hold="pull" action="pull" :name="c.name" :waiting="cf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
+            <div v-else class="btns tight">
+              <button type="button" class="btn sm" :aria-disabled="!fresh || busy || undefined" @click="fresh && !busy && gitExec(c.id, 'fetch')">{{ exec?.running && exec.kind === 'fetch' ? 'Fetching…' : 'Fetch' }}</button>
+              <HoldButton data-hold="pull" class="sm" :disabled="!fresh || busy" :aria-describedby="'hold-hint-' + c.id" @confirm="gitExec(c.id, 'pull')" @early="early">{{ exec?.running && exec.kind === 'pull' ? 'Pulling…' : 'Hold to pull' }}</HoldButton>
+            </div>
+            <ExecPanel v-if="exec" :x="exec" />
+          </section>
+
+          <section v-if="store.ci[c.name]" class="sec" :aria-labelledby="'ci-' + c.id">
+            <div class="sec-h"><h3 :id="'ci-' + c.id" class="lbl">CI · GitHub Actions</h3><a class="src-note" :href="actionsUrl(store.ci[c.name].repo)" target="_blank" rel="noopener">All runs <AppIcon name="ext" /></a></div>
+            <CiRuns :a="store.ci[c.name]" no-link />
+          </section>
+        </div>
+
+        <div class="duo">
+          <section v-if="st" class="sec" :aria-labelledby="'e-' + c.id">
+            <div class="sec-h"><h3 :id="'e-' + c.id" class="lbl">Environment</h3><span class="src-note">/status</span></div>
+            <dl class="facts">
+              <dt>Tools</dt><dd><span v-if="Object.keys(st.mise).length" class="tags"><span v-for="(ver, k) in st.mise" :key="k" class="tag">{{ k }} {{ ver }}</span></span><span v-else class="dim">No .mise.toml</span></dd>
+              <dt>Claude Code</dt>
+              <dd>{{ st.claude_installed === false ? 'Not installed' : st.claude_logged_in ? 'Credentials present' : 'Not signed in' }}<span v-if="st.claude_installed !== false && st.claude_version" class="num"> · {{ st.claude_version }}</span>
+                <button v-if="run && st.claude_installed !== false && st.claude_logged_in" type="button" class="btn sm inl" :aria-disabled="switching || undefined" :title="'Sign Claude Code out of ' + c.name + ' and start a new sign-in'" @click="!switching && switchClaudeAccount(c.id)">{{ switching ? 'Signing out…' : 'Switch account' }}</button>
+              </dd>
+              <template v-if="st.claude_plugins && st.claude_installed !== false">
+                <dt>Claude plugins</dt>
+                <dd><span v-if="Object.keys(st.claude_plugins).length" class="tags"><span v-for="(ver, k) in st.claude_plugins" :key="k" class="tag" :title="k">{{ k.split('@')[0] }}{{ ver ? ' ' + ver.slice(0, 12) : '' }}</span></span><span v-else class="dim">None installed</span>
+                  <template v-if="sync"><br><span v-if="sync.state === 'running'" class="fine">Installing and updating, started {{ ago(sync.at, now) }}</span><span v-else-if="sync.warnings.length" class="fine s-warn">Last sync {{ ago(sync.at, now) }}: {{ sync.warnings.join('; ') }}</span><span v-else class="fine">Synced with settings.json {{ ago(sync.at, now) }}</span></template>
+                </dd>
+              </template>
+              <dt>Status server</dt>
+              <dd><template v-if="fresh"><span title="Starts after setup, so it trails the container">up {{ dur(st.uptime_seconds + (now - ms(c.statusFetchedAt ?? now)) / 1000) }}</span></template><span v-else class="s-bad">not answering</span></dd>
+            </dl>
+          </section>
+
+          <section class="sec" :aria-labelledby="'c-' + c.id">
+            <div class="sec-h"><h3 :id="'c-' + c.id" class="lbl">Container</h3><span class="src-note">Docker API</span></div>
+            <dl class="facts">
+              <dt>State</dt><dd><span class="num">{{ c.state }}{{ c.state === 'exited' ? ` · exit ${c.exitCode}` : '' }}</span> · <span class="num">{{ c.restartCount }}</span> restart{{ c.restartCount === 1 ? '' : 's' }}</dd>
+              <dt>Started</dt><dd class="num">{{ new Date(c.startedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) }}</dd>
+              <dt>ID</dt><dd class="num">{{ sh }} · devnet · proxy</dd>
+              <dt>Image</dt><dd><span class="num">{{ c.image }}</span><br><span class="fine" :class="{ 's-warn': c.imageUpdate }">{{ imageNote }}</span></dd>
+            </dl>
+            <StepUpPanel v-if="cf && cf.action !== 'pull' && cf.action !== 'remove'" :data-hold="cf.action" :action="cf.action" :name="c.name" :waiting="cf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
+            <div v-else class="btns tight">
+              <template v-if="run || c.state === 'restarting'">
+                <HoldButton v-if="run" data-hold="restart" class="sm" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'restart')" @early="early"><AppIcon name="refresh" /> Hold to restart</HoldButton>
+                <HoldButton data-hold="stop" class="sm" danger :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'stop')" @early="early">Hold to stop</HoldButton>
+              </template>
+              <button v-else type="button" class="btn sm pri" :aria-disabled="busy || undefined" @click="busy || containerAction(c.id, 'start')">Start</button>
+              <button type="button" class="btn sm" :aria-disabled="checking || store.dockerDown || undefined" @click="checking || store.dockerDown || check()">{{ checking ? 'Checking…' : 'Check for update' }}</button>
+              <HoldButton data-hold="update" class="sm" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'update')" @early="early">{{ c.pending === 'update' ? 'Updating…' : c.imageUpdate ? 'Hold to update' : 'Hold to pull and restart' }}</HoldButton>
+            </div>
+            <p :id="'hold-hint-' + c.id" class="fine">{{ hint }}</p>
+          </section>
+        </div>
 
         <section class="sec" :aria-labelledby="'cfg-' + c.id">
           <div class="sec-h"><h3 :id="'cfg-' + c.id" class="lbl">Configuration</h3><span class="src-note">stack variables</span></div>
-          <label class="check"><input v-model="cfg.installClaude" type="checkbox" :disabled="busy"><span>Install Claude Code</span><small>Installed on the next start and updated on every restart, with its VS Code extension.</small></label>
-          <label class="check"><input v-model="cfg.injectClaudeConfig" type="checkbox" :disabled="busy || (!cfgRepo && !c.config.injectClaudeConfig)"><span>Inject my Claude config</span>
-            <small v-if="cfgRepo || c.config.injectClaudeConfig">Checks out {{ cfgRepo || 'the config repo' }} over <code>~/.claude</code> on every start, through a read-only deploy key. Turning it off removes that key.</small>
-            <small v-else>Set your <code>~/.claude</code> repo in <RouterLink to="/settings">Settings</RouterLink> first.</small>
-          </label>
-          <label class="check"><input v-model="cfg.vscodeConfig" type="checkbox" :disabled="busy"><span>Apply my VS Code settings</span><small>Written only when the home volume has no VS Code Machine settings yet. To change them now, use Replace below.</small></label>
+          <div class="checks">
+            <label class="check"><input v-model="cfg.installClaude" type="checkbox" :disabled="busy"><span>Install Claude Code</span><small>Installed on the next start and updated on every restart, with its VS Code extension.</small></label>
+            <label class="check"><input v-model="cfg.injectClaudeConfig" type="checkbox" :disabled="busy || (!cfgRepo && !c.config.injectClaudeConfig)"><span>Inject my Claude config</span>
+              <small v-if="cfgRepo || c.config.injectClaudeConfig">Checks out {{ cfgRepo || 'the config repo' }} over <code>~/.claude</code> on every start, through a read-only deploy key. Turning it off removes that key.</small>
+              <small v-else>Set your <code>~/.claude</code> repo in <RouterLink to="/settings">Settings</RouterLink> first.</small>
+            </label>
+            <label class="check"><input v-model="cfg.vscodeConfig" type="checkbox" :disabled="busy"><span>Apply my VS Code settings</span><small>Written only when the home volume has no VS Code Machine settings yet. To change them now, use Replace below.</small></label>
+          </div>
           <StepUpPanel v-if="cfgCf" data-hold="config" action="update" :name="c.name" :text="`Recreates ${c.name} from its Portainer stack with the new options${c.imageUpdate ? ', on the newer image already pulled' : ''}. /home/dev and the workspace stay; the tunnel drops until the new container is up.`" :waiting="cfgCf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-          <div v-else class="btns"><HoldButton data-hold="config" :disabled="busy || !cfgChanged" :aria-describedby="'hold-hint-' + c.id" @confirm="applyConfig(c.id, { ...cfg })" @early="early">{{ c.pending === 'config' ? 'Applying…' : 'Hold to apply and recreate' }}</HoldButton></div>
-          <p class="fine">{{ cfgChanged ? `Applying recreates the container${c.imageUpdate ? ' on the newer image already pulled, like Update does' : ''}; /home/dev and the workspace stay.` : 'Change an option to apply it.' }}</p>
+          <div v-else class="act">
+            <div class="btns tight"><HoldButton data-hold="config" class="sm" :disabled="busy || !cfgChanged" :aria-describedby="'hold-hint-' + c.id" @confirm="applyConfig(c.id, { ...cfg })" @early="early">{{ c.pending === 'config' ? 'Applying…' : 'Hold to apply and recreate' }}</HoldButton></div>
+            <p class="fine">{{ cfgChanged ? `Applying recreates the container${c.imageUpdate ? ' on the newer image already pulled, like Update does' : ''}; /home/dev and the workspace stay.` : 'Change an option to apply it.' }}</p>
+          </div>
 
-          <template v-if="c.config.injectClaudeConfig">
-            <div class="sec-h"><h3 class="lbl">Claude config in the container</h3><button type="button" class="btn sm" :aria-disabled="!run || !!cd?.busy || undefined" @click="run && !cd?.busy && loadClaudeDiff(c.id, true)"><AppIcon name="refresh" /> Reload</button></div>
-            <template v-if="run && cd?.data">
-              <p class="fine">{{ cdFiles ? `${cdFiles} file${cdFiles > 1 ? 's' : ''} changed in ~/.claude since config commit ${cd.data.commit}${cd.data.truncated ? '. Too long to show in full, the rest is cut' : ''}.` : `Same as your config repo (${cd.data.commit}).` }}</p>
-              <pre v-if="cdRows.length" class="term diff" tabindex="0" aria-label="Changes to the Claude config"><span v-for="(r, i) in cdRows" :key="i" :class="'d-' + r.kind">{{ r.text }}
+          <div class="folds">
+            <details v-if="c.config.injectClaudeConfig" class="fold">
+              <summary><span class="fold-t">Claude config in the container</span><span class="fold-s">{{ cdSum }}</span></summary>
+              <div class="fold-b">
+                <template v-if="run && cd?.data">
+                  <p v-if="cd.data.truncated" class="fine">Too long to show in full, the rest is cut.</p>
+                  <pre v-if="cdRows.length" class="term diff" tabindex="0" aria-label="Changes to the Claude config"><span v-for="(r, i) in cdRows" :key="i" :class="'d-' + r.kind">{{ r.text }}
 </span></pre>
-            </template>
-            <p v-else class="fine">{{ !run ? 'Start the container to see what changed in its Claude config.' : cd?.busy ? 'Loading the changes…' : cd?.error ? `Could not read the changes: ${cd.error}` : 'Read once the container answers /status. Press Reload to read them now.' }}</p>
-            <StepUpPanel v-if="ccCf" data-hold="claudecfg" action="update" :name="c.name" text="Downloads your Claude config repo again over ~/.claude in the container, edits made there to its files included." :waiting="ccCf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-            <div v-else class="btns"><HoldButton data-hold="claudecfg" :disabled="!run || busy" @confirm="pullClaudeConfig(c.id)" @early="early">{{ c.pending === 'claudeConfig' ? 'Downloading…' : 'Hold to re-download my Claude config' }}</HoldButton></div>
-            <p class="fine">{{ run ? 'Fetches ' + (cfgRepo || 'the config repo') + ' now and overwrites the files it tracks in ~/.claude, edits made in the container included. Credentials, history and other files stay. No restart; start a new Claude session to pick it up.' : 'Start the container to download it.' }}</p>
-          </template>
+                </template>
+                <p v-else class="fine">{{ !run ? 'Start the container to see what changed in its Claude config.' : cd?.busy ? 'Loading the changes…' : cd?.error ? `Could not read the changes: ${cd.error}` : 'Read once the container answers /status. Press Reload to read them now.' }}</p>
+                <StepUpPanel v-if="ccCf" data-hold="claudecfg" action="update" :name="c.name" text="Downloads your Claude config repo again over ~/.claude in the container, edits made there to its files included." :waiting="ccCf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
+                <div v-else class="btns tight">
+                  <button type="button" class="btn sm" :aria-disabled="!run || !!cd?.busy || undefined" @click="run && !cd?.busy && loadClaudeDiff(c.id, true)"><AppIcon name="refresh" /> Reload</button>
+                  <HoldButton data-hold="claudecfg" class="sm" :disabled="!run || busy" @confirm="pullClaudeConfig(c.id)" @early="early">{{ c.pending === 'claudeConfig' ? 'Downloading…' : 'Hold to re-download my Claude config' }}</HoldButton>
+                </div>
+                <p class="fine">{{ run ? 'Fetches ' + (cfgRepo || 'the config repo') + ' now and overwrites the files it tracks in ~/.claude, edits made in the container included. Credentials, history and other files stay. No restart; start a new Claude session to pick it up.' : 'Start the container to download it.' }}</p>
+              </div>
+            </details>
 
-          <div class="sec-h"><h3 class="lbl">VS Code settings in the container</h3><button type="button" class="btn sm" :aria-disabled="!run || !!vs?.busy || undefined" @click="run && !vs?.busy && loadVscode(c.id, true)"><AppIcon name="refresh" /> Reload</button></div>
-          <pre v-if="vs?.settings" class="term" tabindex="0" aria-label="VS Code Machine settings">{{ vs.settings }}</pre>
-          <p v-else class="fine">{{ !run ? 'Start the container to read them.' : vs?.busy === 'load' ? 'Loading…' : !vs ? 'Read once the container answers /status. Press Reload to read them now.' : vs.settings === undefined ? 'Could not read them. Press Reload to try again.' : vs.settings === '' ? 'The file is empty. VS Code uses only your own settings here.' : 'None. VS Code uses only your own settings here.' }}</p>
-          <StepUpPanel v-if="vsCf" data-hold="vscode" action="update" :name="c.name" text="Overwrites the VS Code Machine settings in the container with yours, edits made in the container included." :waiting="vsCf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-          <div v-else class="btns"><HoldButton data-hold="vscode" :disabled="!run || busy || !!vs?.busy || !vsGlobal" @confirm="replaceVscode(c.id)" @early="early">{{ vs?.busy === 'replace' || c.pending === 'vscode' ? 'Replacing…' : 'Hold to replace with my settings' }}</HoldButton></div>
-          <p class="fine">{{ vsGlobal ? 'Overwrites ~/.vscode-server/data/Machine/settings.json with your VS Code settings from Settings, edits made in the container included. No restart; reload the VS Code window if it does not pick them up.' : 'Set your VS Code settings in Settings first.' }}</p>
-        </section>
-
-        <section class="sec" :aria-labelledby="'c-' + c.id">
-          <div class="sec-h"><h3 :id="'c-' + c.id" class="lbl">Container</h3><span class="src-note">Docker API</span></div>
-          <dl class="facts">
-            <dt>State</dt><dd class="num">{{ c.state }}{{ c.state === 'exited' ? ` · exit ${c.exitCode}` : '' }}</dd>
-            <dt>Started</dt><dd class="num">{{ new Date(c.startedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) }}</dd>
-            <dt>Restart count</dt><dd class="num">{{ c.restartCount }}</dd>
-            <dt>ID</dt><dd class="num">{{ sh }}</dd>
-            <dt>Networks</dt><dd class="num">devnet · proxy</dd>
-            <dt>Image</dt><dd><span class="num">{{ c.image }}</span><br><span class="fine" :class="{ 's-warn': c.imageUpdate }">{{ imageNote }}</span></dd>
-          </dl>
-          <StepUpPanel v-if="cf && cf.action !== 'pull'" :data-hold="cf.action" :action="cf.action" :name="c.name" :waiting="cf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-          <template v-else>
-            <div v-if="run || c.state === 'restarting'" class="btns">
-              <HoldButton v-if="run" data-hold="restart" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'restart')" @early="early"><AppIcon name="refresh" /> Hold to restart</HoldButton>
-              <HoldButton data-hold="stop" danger :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'stop')" @early="early">Hold to stop</HoldButton>
-            </div>
-            <div v-else class="btns"><button type="button" class="btn pri" :aria-disabled="busy || undefined" @click="busy || containerAction(c.id, 'start')">Start</button></div>
-            <div class="btns">
-              <button type="button" class="btn" :aria-disabled="checking || store.dockerDown || undefined" @click="checking || store.dockerDown || check()">{{ checking ? 'Checking…' : 'Check for update' }}</button>
-              <HoldButton data-hold="update" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'update')" @early="early">{{ c.pending === 'update' ? 'Updating…' : c.imageUpdate ? 'Hold to update' : 'Hold to pull and restart' }}</HoldButton>
-            </div>
-            <div class="field"><label :for="'rm-' + c.id">Type <code>{{ c.name }}</code> to purge it</label><input :id="'rm-' + c.id" v-model="rmName" class="inp num" autocomplete="off" autocapitalize="none" spellcheck="false" :disabled="busy" :aria-describedby="'rm-note-' + c.id"></div>
-            <div class="btns">
-              <HoldButton data-hold="remove" danger :disabled="busy || rmName.trim() !== c.name" :aria-describedby="'rm-note-' + c.id + ' hold-hint-' + c.id" @confirm="containerAction(c.id, 'remove')" @early="early">{{ c.pending === 'remove' ? 'Purging…' : 'Hold to purge container' }}</HoldButton>
-            </div>
-            <p :id="'rm-note-' + c.id" class="fine" :class="{ 's-warn': lost }">Purge deletes the Portainer stack, the container, its /home/dev volume with the workspace{{ lost ? `, including ${lost}` : '' }}, and its deploy keys on GitHub. It cannot be undone.</p>
-          </template>
-          <p :id="'hold-hint-' + c.id" class="fine">{{ hint }}</p>
+            <details class="fold">
+              <summary><span class="fold-t">VS Code settings in the container</span><span class="fold-s">{{ vsSum }}</span></summary>
+              <div class="fold-b">
+                <pre v-if="vs?.settings" class="term" tabindex="0" aria-label="VS Code Machine settings">{{ vs.settings }}</pre>
+                <p v-else class="fine">{{ !run ? 'Start the container to read them.' : vs?.busy === 'load' ? 'Loading…' : !vs ? 'Read once the container answers /status. Press Reload to read them now.' : vs.settings === undefined ? 'Could not read them. Press Reload to try again.' : vs.settings === '' ? 'The file is empty. VS Code uses only your own settings here.' : 'None. VS Code uses only your own settings here.' }}</p>
+                <StepUpPanel v-if="vsCf" data-hold="vscode" action="update" :name="c.name" text="Overwrites the VS Code Machine settings in the container with yours, edits made in the container included." :waiting="vsCf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
+                <div v-else class="btns tight">
+                  <button type="button" class="btn sm" :aria-disabled="!run || !!vs?.busy || undefined" @click="run && !vs?.busy && loadVscode(c.id, true)"><AppIcon name="refresh" /> Reload</button>
+                  <HoldButton data-hold="vscode" class="sm" :disabled="!run || busy || !!vs?.busy || !vsGlobal" @confirm="replaceVscode(c.id)" @early="early">{{ vs?.busy === 'replace' || c.pending === 'vscode' ? 'Replacing…' : 'Hold to replace with my settings' }}</HoldButton>
+                </div>
+                <p class="fine">{{ vsGlobal ? 'Overwrites ~/.vscode-server/data/Machine/settings.json with your VS Code settings from Settings, edits made in the container included. No restart; reload the VS Code window if it does not pick them up.' : 'Set your VS Code settings in Settings first.' }}</p>
+              </div>
+            </details>
+          </div>
         </section>
 
         <section class="sec" :aria-labelledby="'l-' + c.id">
           <div class="sec-h"><h3 :id="'l-' + c.id" class="lbl">Log · last 100 lines</h3><button type="button" class="btn sm" :aria-disabled="store.dockerDown || refreshing || undefined" @click="store.dockerDown || refreshing || refresh()"><AppIcon name="refresh" /> Refresh</button></div>
           <pre class="term log" tabindex="0" aria-label="Container log"><template v-for="(l, i) in lines" :key="i"><span :class="l.cls"><template v-for="(p, j) in l.parts" :key="j"><mark v-if="j % 2">{{ p }}</mark><template v-else>{{ p }}</template></template></span>{{ i < lines.length - 1 ? '\n' : '' }}</template></pre>
+        </section>
+
+        <section class="sec">
+          <details class="fold danger">
+            <summary><span class="fold-t">Danger zone</span><span class="fold-s">Purge the container, its /home/dev volume and deploy keys</span></summary>
+            <div class="fold-b">
+              <StepUpPanel v-if="cf?.action === 'remove'" data-hold="remove" action="remove" :name="c.name" :waiting="cf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
+              <template v-else>
+                <div class="field"><label :for="'rm-' + c.id">Type <code>{{ c.name }}</code> to purge it</label><input :id="'rm-' + c.id" v-model="rmName" class="inp num" autocomplete="off" autocapitalize="none" spellcheck="false" :disabled="busy" :aria-describedby="'rm-note-' + c.id"></div>
+                <div class="btns tight">
+                  <HoldButton data-hold="remove" class="sm" danger :disabled="busy || rmName.trim() !== c.name" :aria-describedby="'rm-note-' + c.id + ' hold-hint-' + c.id" @confirm="containerAction(c.id, 'remove')" @early="early">{{ c.pending === 'remove' ? 'Purging…' : 'Hold to purge container' }}</HoldButton>
+                </div>
+              </template>
+              <p :id="'rm-note-' + c.id" class="fine" :class="{ 's-warn': lost }">Purge deletes the Portainer stack, the container, its /home/dev volume with the workspace{{ lost ? `, including ${lost}` : '' }}, and its deploy keys on GitHub. It cannot be undone.</p>
+            </div>
+          </details>
         </section>
 
         <section class="sec">

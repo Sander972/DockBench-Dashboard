@@ -8,7 +8,7 @@ import AppIcon from './AppIcon.vue'
 import Led from './Led.vue'
 
 // GitHub Actions of one repo: what runs now, the newest run of each workflow, the last success and failure. Shared by the Actions page and a dev container's detail.
-const props = defineProps<{ a: RepoActions }>()
+const props = defineProps<{ a: RepoActions; noLink?: boolean }>()
 const now = useNow()
 const going = computed(() => new Set(props.a.running.map(r => r.id)))
 const done = computed(() => props.a.latest.filter(r => !going.value.has(r.id)))
@@ -38,6 +38,6 @@ const done = computed(() => props.a.latest.filter(r => !going.value.has(r.id)))
       <template v-if="a.lastFailure">last failure <a :href="a.lastFailure.url" target="_blank" rel="noopener">{{ a.lastFailure.workflow }} {{ ago(a.lastFailure.updatedAt, now) }}</a></template>
       <template v-else> · no failure in the last 30 runs</template>
     </p>
-    <a class="btn sm" :href="actionsUrl(a.repo)" target="_blank" rel="noopener">All runs on GitHub <AppIcon name="ext" /></a>
+    <a v-if="!noLink" class="btn sm" :href="actionsUrl(a.repo)" target="_blank" rel="noopener">All runs on GitHub <AppIcon name="ext" /></a>
   </div>
 </template>
