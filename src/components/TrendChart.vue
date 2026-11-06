@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useNow } from '../composables/useNow'
-import { ago, gib, since, toGiB } from '../lib/format'
+import { ago, gib, toGiB } from '../lib/format'
 
-// CPU and RAM history of one container on one chart, each line on its own scale (left axis CPU %, right axis RAM GiB), so a container that idles at 1% CPU still shows its shape next to its memory; the current figures sit in the vitals above, so the key shows values only for a hovered sample
+// CPU and RAM history of one container on one chart, each line on its own scale (left axis CPU %, right axis RAM GiB), so a container that idles at 1% CPU still shows its shape next to its memory; no legend: the CPU and RAM labels in the vitals above and the axis tops carry the line colors, and a hovered sample's values show between the axis tops
 const props = defineProps<{ t: number[]; cpu: number[]; mem: number[] }>()
 const now = useNow()
 
@@ -38,13 +38,9 @@ const fmt = (v: number) => String(+v.toPrecision(3))
 
 <template>
   <div class="trend">
-    <div class="trend-key num">
-      <span class="k k-cpu">CPU<template v-if="hover !== null"> {{ cpuNow.toFixed(1) }}%</template></span>
-      <span class="k k-mem">RAM<template v-if="hover !== null"> {{ gib(toGiB(memNow)) }} GiB</template></span>
-      <span class="dim">{{ hover !== null ? when : t.length > 1 ? 'past ' + since(t[0], now) : 'now' }}</span>
-    </div>
     <div class="trend-plot">
       <span class="ax ax-l num">{{ fmt(cpuTop) }}%</span>
+      <span v-if="hover !== null" class="ax ax-h num">{{ cpuNow.toFixed(1) }}% · {{ gib(toGiB(memNow)) }} GiB · {{ when }}</span>
       <span class="ax ax-r num">{{ fmt(memTop) }} GiB</span>
       <svg :viewBox="`0 0 ${W} ${H}`" preserveAspectRatio="none" role="img" :aria-label="`CPU and RAM, last ${cpu.length} samples`" @pointerdown="move" @pointermove="move" @pointerleave="hover = null">
         <line class="grid" x1="0" :x2="W" :y1="H / 2" :y2="H / 2" />

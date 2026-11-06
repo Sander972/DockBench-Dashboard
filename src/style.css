@@ -24,6 +24,7 @@
   --shade:oklch(0.45 0.01 95 / .16);
   --ink-dark:oklch(0.20 0.012 95); --ink-light:oklch(0.98 0.004 95);
   --accent:#f0c22b; --on-accent:var(--ink-dark);
+  --t-mem:oklch(0.52 0.09 190); /* RAM line of the detail trend chart, next to CPU in the accent */
   --f-ui:"Archivo Variable", "Helvetica Neue", Arial, sans-serif;
   --f-num:"Martian Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --top-h:65px;
@@ -39,6 +40,7 @@
   --ok-ink:oklch(0.80 0.14 148); --warn-ink:oklch(0.85 0.13 80); --bad-ink:oklch(0.76 0.15 27);
   --warn-wash:oklch(0.27 0.045 80); --bad-wash:oklch(0.26 0.05 27);
   --hi:oklch(0.27 0.007 95); --shade:oklch(0.08 0.005 95 / .5);
+  --t-mem:oklch(0.78 0.09 190);
   color-scheme:dark;
 }}
 :root[data-theme="dark"]{
@@ -51,6 +53,7 @@
   --ok-ink:oklch(0.80 0.14 148); --warn-ink:oklch(0.85 0.13 80); --bad-ink:oklch(0.76 0.15 27);
   --warn-wash:oklch(0.27 0.045 80); --bad-wash:oklch(0.26 0.05 27);
   --hi:oklch(0.27 0.007 95); --shade:oklch(0.08 0.005 95 / .5);
+  --t-mem:oklch(0.78 0.09 190);
   color-scheme:dark;
 }
 
@@ -232,7 +235,7 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 
 /* ---------- detail ---------- */
 .detailpane{min-width:0;overflow-anchor:none} /* the detail is patched in place on a new pick, unlike the mockup's full re-render: keep the page where it is */
-.d-wrap{display:grid;gap:16px;padding-bottom:16px;container-type:inline-size}
+.d-wrap{--t-cpu:color-mix(in oklab,var(--accent) 80%,var(--fg));display:grid;gap:16px;padding-bottom:16px;container-type:inline-size}
 .back{display:inline-flex;align-self:start;justify-self:start;margin-left:-10px}
 .d-head{display:grid;grid-template-columns:14px minmax(0,1fr);gap:4px 12px;align-items:center}
 .d-head .led{width:14px;height:14px}
@@ -268,12 +271,7 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 .vital{display:flex;align-items:baseline;gap:8px;min-width:0;white-space:nowrap}
 .vital .big{font-size:1.125rem;font-weight:500;letter-spacing:-.01em}
 .v-sub{font-size:.75rem;color:var(--fg-2)}
-.trend{--t-cpu:color-mix(in oklab,var(--accent) 80%,var(--fg));--t-mem:var(--fg-2);display:grid;gap:4px}
-.trend-key{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:.6875rem;color:var(--fg-2)}
-.trend-key .k{display:inline-flex;align-items:center;gap:6px}
-.trend-key .k::before{content:"";width:12px;height:2px;border-radius:1px;background:var(--c)}
-.k-cpu{--c:var(--t-cpu)} .k-mem{--c:var(--t-mem)}
-.trend-key .dim{margin-left:auto}
+.vital .c-cpu{color:var(--t-cpu)} .vital .c-mem{color:var(--t-mem)}
 .trend-plot{position:relative;height:88px;padding-top:16px}
 .trend svg{display:block;width:100%;height:100%;touch-action:pan-y;cursor:crosshair;overflow:visible}
 .trend .grid{stroke:var(--line);stroke-dasharray:2 3;vector-effect:non-scaling-stroke}
@@ -283,7 +281,8 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 .trend .ln.mem{stroke:var(--t-mem)}
 .trend .xh{stroke:var(--fg-3);vector-effect:non-scaling-stroke}
 .ax{position:absolute;top:0;font-size:.625rem;line-height:1;color:var(--fg-3);pointer-events:none}
-.ax-l{left:0} .ax-r{right:0}
+.ax-l{left:0;color:var(--t-cpu)} .ax-r{right:0;color:var(--t-mem)}
+.ax-h{left:50%;transform:translateX(-50%);white-space:nowrap;color:var(--fg-2)}
 
 /* paired sections side by side once the detail column has the room (Git | CI, Environment | Container) */
 .duo{display:grid;min-width:0}
@@ -297,6 +296,10 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 a.src-note{display:inline-flex;align-items:center;gap:4px;color:var(--fg-2);text-decoration:none}
 a.src-note:hover{color:var(--fg)}
 .src-note .i{width:12px;height:12px}
+/* CI header: title left, repo centered, GitHub button right, on one row */
+.ci-h{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center}
+.ci-h > h3{white-space:nowrap}
+.ci-h > .src-note{text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .btn.inl{margin-left:8px}
 .duo dl.facts{grid-template-columns:minmax(5.5rem,auto) minmax(0,1fr);gap:6px 12px}
 .facts .tag{padding:3px 6px}

@@ -189,8 +189,8 @@ onUpdated(() => {
           <div class="sec-h"><h3 :id="'r-' + c.id" class="lbl">Resources</h3><span class="src-note">Docker stats · every {{ prefs.poll }}s</span></div>
           <div class="vitals">
             <template v-if="run">
-              <div class="vital"><span class="lbl">CPU</span><span class="num big" :class="useCls(cpuPct(c))">{{ cpuPct(c).toFixed(1) }}%</span><span class="num v-sub">{{ ((cpuPct(c) / 100) * ncpu).toFixed(1) }}/{{ ncpu }} cores</span></div>
-              <div class="vital"><span class="lbl">RAM</span><span class="num big" :class="useCls(memPct(c))">{{ memPct(c).toFixed(0) }}%</span><span class="num v-sub">{{ gib(toGiB(c.memUsed)) }}/{{ gib(toGiB(c.memLimit)) }} GiB</span></div>
+              <div class="vital"><span class="lbl c-cpu">CPU</span><span class="num big" :class="useCls(cpuPct(c))">{{ cpuPct(c).toFixed(1) }}%</span><span class="num v-sub">{{ ((cpuPct(c) / 100) * ncpu).toFixed(1) }}/{{ ncpu }} cores</span></div>
+              <div class="vital"><span class="lbl c-mem">RAM</span><span class="num big" :class="useCls(memPct(c))">{{ memPct(c).toFixed(0) }}%</span><span class="num v-sub">{{ gib(toGiB(c.memUsed)) }}/{{ gib(toGiB(c.memLimit)) }} GiB</span></div>
             </template>
             <div class="vital" :title="`Writable layer ${gib(toGiB(c.diskRw))} GiB, /home/dev volume ${gib(toGiB(c.diskVolume))} GiB, budget ${toGiB(DISK_BUDGET)} GiB`"><span class="lbl">Disk</span><span class="num big" :class="useCls(diskPct(c))">{{ diskPct(c).toFixed(0) }}%</span><span class="num v-sub">{{ gib(toGiB(diskBytes(c))) }}/{{ toGiB(DISK_BUDGET) }} GiB</span></div>
           </div>
@@ -216,7 +216,7 @@ onUpdated(() => {
           </section>
 
           <section v-if="store.ci[c.name]" class="sec" :aria-labelledby="'ci-' + c.id">
-            <div class="sec-h"><h3 :id="'ci-' + c.id" class="lbl">CI · GitHub Actions</h3><a class="src-note" :href="actionsUrl(store.ci[c.name].repo)" target="_blank" rel="noopener">All runs <AppIcon name="ext" /></a></div>
+            <div class="sec-h ci-h"><h3 :id="'ci-' + c.id" class="lbl">CI · GitHub Actions</h3><span class="src-note">{{ store.ci[c.name].repo }}</span><a class="btn sm" :href="actionsUrl(store.ci[c.name].repo)" target="_blank" rel="noopener">All runs on GitHub <AppIcon name="ext" /></a></div>
             <CiRuns :a="store.ci[c.name]" no-link />
           </section>
         </div>
