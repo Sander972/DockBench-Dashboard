@@ -24,7 +24,7 @@ export function verdict(c: DevContainer): Verdict {
   const t = c.status?.tunnel
   if (t === 'waiting_for_login') return v('warn', 'Tunnel login', true)
   if (t === 'down') return v('bad', 'Tunnel down')
-  if (t === 'unknown') return v('warn', 'Tunnel ?')
+  if (t === 'unknown') return v('warn', 'Tunnel unknown')
   if (cpuPct(c) >= 90) return v('warn', 'CPU hot')
   if (memPct(c) >= 90) return v('warn', 'RAM full')
   return v('ok', 'Running')

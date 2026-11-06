@@ -60,7 +60,7 @@ describe('format', () => {
     expect(gitMsg('fetch', { exitCode: 128, output: 'fatal: could not read from remote repository' }, st({}))).toBe('Fetch failed: could not read from remote repository')
   })
   it('usage class', () => {
-    expect(useCls(69.9)).toBe('s-ok')
+    expect(useCls(69.9)).toBe('')
     expect(useCls(70)).toBe('s-warn')
     expect(useCls(90)).toBe('s-bad')
   })

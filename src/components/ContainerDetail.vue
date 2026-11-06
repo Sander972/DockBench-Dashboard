@@ -164,9 +164,7 @@ onUpdated(() => {
         <div class="btns">
           <a class="btn pri" :href="web" target="_blank" rel="noopener noreferrer" :aria-disabled="canOpen ? undefined : 'true'" :tabindex="canOpen ? undefined : -1">Open in vscode.dev <AppIcon name="ext" /></a>
           <a class="btn" :href="desk" :aria-disabled="canOpen ? undefined : 'true'" :tabindex="canOpen ? undefined : -1">VS Code desktop <AppIcon name="ext" /></a>
-        </div>
-        <div v-if="wsf" class="btns">
-          <a class="btn" :href="wsDesk" :aria-disabled="canOpen ? undefined : 'true'" :tabindex="canOpen ? undefined : -1" :title="wsf">Workspace in desktop <AppIcon name="ext" /></a>
+          <a v-if="wsf" class="btn" :href="wsDesk" :aria-disabled="canOpen ? undefined : 'true'" :tabindex="canOpen ? undefined : -1" :title="wsf">Workspace in desktop <AppIcon name="ext" /></a>
         </div>
         <p class="fine">{{ openReason }}</p>
       </div>

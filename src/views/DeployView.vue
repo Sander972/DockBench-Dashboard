@@ -12,7 +12,7 @@ watch(() => !!store.draft.run, () => nextTick(() => { if (!store.confirm) docume
 
 <template>
   <DeployRun v-if="store.draft.run" />
-  <div v-else class="page page-wide">
+  <div v-else class="page">
     <div class="page-h"><h1 tabindex="-1">Deploy</h1><p>Start a dev container from a repository your GitHub account can reach.</p></div>
     <div class="deploy">
       <RepoPicker />

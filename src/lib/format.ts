@@ -68,7 +68,8 @@ export function gitMsg(kind: 'fetch' | 'pull', x: { exitCode: number | null; out
   return fatal ? `Pull failed: ${fatal.replace(/^\w+:\s*/, '')}` : `Pull failed with exit ${x.exitCode}.`
 }
 
-export const useCls = (p: number) => (p >= 90 ? 's-bad' : p >= 70 ? 's-warn' : 's-ok')
+// a usage figure is only colored once it needs attention; below 70% it stays plain text
+export const useCls = (p: number) => (p >= 90 ? 's-bad' : p >= 70 ? 's-warn' : '')
 
 export function luminance(hex: string) {
   const n = parseInt(hex.slice(1), 16)

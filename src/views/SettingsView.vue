@@ -112,6 +112,7 @@ async function toggle(k: Guarded, e: Event) {
 <template>
   <div class="page">
     <div class="page-h"><h1>Settings</h1><p>Look and polling are saved in this browser only. Devices, passkeys, checks, the Claude config repo and the VS Code settings are saved on the dashboard server.</p></div>
+    <div class="set-cols">
     <div class="plate">
       <fieldset class="set"><legend id="updT">Updates</legend>
         <p class="fine">The server pulls the dashboard and bot images through Portainer every 30 minutes; a newer one shows here, ready to install. Dev container images update from each container on Bench.</p>
@@ -229,5 +230,6 @@ async function toggle(k: Guarded, e: Event) {
       </fieldset>
     </div>
     <div class="plate"><div class="set"><span class="set-t">Signed in as {{ store.session?.user }}</span><div class="btns"><button type="button" class="btn" @click="signOut">Sign out</button></div></div></div>
+    </div>
   </div>
 </template>

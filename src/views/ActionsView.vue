@@ -44,7 +44,7 @@ onBeforeUnmount(() => clearInterval(timer))
 </script>
 
 <template>
-  <div class="page page-wide">
+  <div class="page">
     <div class="page-h"><h1>Actions</h1><p>GitHub Actions of your repositories: what is running, whether the default branch passes, the last success and failure. Refreshed every 30 seconds.</p></div>
 
     <div class="list-tools">
@@ -67,13 +67,13 @@ onBeforeUnmount(() => clearInterval(timer))
           <span class="rh"><span class="name"><span class="pre">{{ a.repo.split('/')[0] }}/</span>{{ a.repo.split('/')[1] }}</span><span class="state" :class="'s-' + REPO_SEV[a.state]">{{ REPO_WORD[a.state] }}</span></span>
           <span class="meta">
             <template v-if="a.running.length"><template v-for="(r, i) in a.running" :key="r.id">{{ i ? ' · ' : '' }}{{ r.workflow }} {{ runWord(r) }} {{ since(r.startedAt, now) }}</template></template>
-            <template v-else-if="a.latest.length"><template v-for="(r, i) in a.latest" :key="r.id">{{ i ? ' · ' : '' }}<span :class="'s-' + runSev(r)">{{ r.workflow }} {{ runWord(r) }}</span> {{ ago(r.updatedAt, now) }}</template></template>
+            <template v-else-if="a.latest.length"><template v-for="(r, i) in a.latest" :key="r.id">{{ i ? ' · ' : '' }}<span :class="runSev(r) !== 'ok' && 's-' + runSev(r)">{{ r.workflow }} {{ runWord(r) }}</span> {{ ago(r.updatedAt, now) }}</template></template>
             <template v-else>no workflow runs</template>
           </span>
           <span class="meta2">
             <span v-if="a.deployedAs" class="tag">{{ a.deployedAs }}</span>
-            <span v-if="a.lastSuccess">✓ {{ ago(a.lastSuccess.updatedAt, now) }}</span>
-            <span v-if="a.lastFailure" class="s-bad">✗ {{ ago(a.lastFailure.updatedAt, now) }}</span>
+            <span v-if="a.lastSuccess">last passed {{ ago(a.lastSuccess.updatedAt, now) }}</span>
+            <span v-if="a.lastFailure" class="s-bad">last failed {{ ago(a.lastFailure.updatedAt, now) }}</span>
             <span v-if="a.private === false" class="s-off">public</span>
           </span>
         </button>

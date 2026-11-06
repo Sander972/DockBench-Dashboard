@@ -35,7 +35,7 @@ describe('verdict, handoff 6.1', () => {
   it('tunnel states', () => {
     expect(w({ status: st({ tunnel: 'waiting_for_login' }) })).toBe('warn Tunnel login *')
     expect(w({ status: st({ tunnel: 'down' }) })).toBe('bad Tunnel down')
-    expect(w({ status: st({ tunnel: 'unknown' }) })).toBe('warn Tunnel ?')
+    expect(w({ status: st({ tunnel: 'unknown' }) })).toBe('warn Tunnel unknown')
   })
   it('CPU hot and RAM full', () => {
     expect(w({ cpuPct: 90 })).toBe('warn CPU hot')
@@ -53,7 +53,7 @@ describe('verdict, handoff 6.1', () => {
     expect(w({ statusError: 'dead', status: st({ tunnel: 'waiting_for_login' }) })).toBe('bad Status down')
     expect(w({ status: st({ tunnel: 'waiting_for_login' }), cpuPct: 95 })).toBe('warn Tunnel login *')
     expect(w({ status: st({ tunnel: 'down' }), cpuPct: 95 })).toBe('bad Tunnel down')
-    expect(w({ status: st({ tunnel: 'unknown' }), memUsed: 4 * G })).toBe('warn Tunnel ?')
+    expect(w({ status: st({ tunnel: 'unknown' }), memUsed: 4 * G })).toBe('warn Tunnel unknown')
     expect(w({ cpuPct: 95, memUsed: 4 * G })).toBe('warn CPU hot')
   })
 

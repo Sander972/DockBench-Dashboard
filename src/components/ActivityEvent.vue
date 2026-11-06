@@ -16,7 +16,7 @@ const last = computed(() => props.e.calls.map(c => c.status).filter(Boolean).pop
       <Led :sev="e.ok ? 'ok' : 'bad'" :size="7" /><b>{{ e.what }}</b><span>{{ e.target }}</span>
       <span v-if="last" class="codes" :class="e.ok ? 'code-ok' : 'code-bad'">{{ last }}</span>
     </div>
-    <div v-if="e.calls.length" class="ev-calls num"><template v-for="(c, i) in e.calls" :key="i"><br v-if="i" />{{ c.method }} {{ c.path }}</template></div>
+    <div v-if="e.calls.length" class="ev-calls num"><span v-for="(c, i) in e.calls" :key="i" :title="`${c.method} ${c.path}`">{{ c.method }} {{ c.path }}</span></div>
     <div class="ev-by">{{ e.device ?? e.actor }}<template v-if="e.ip"> · {{ e.ip }}</template><template v-if="e.note"> · {{ e.note }}</template><template v-if="e.ms"> · {{ (e.ms / 1000).toFixed(1) }}s</template></div>
   </li>
 </template>

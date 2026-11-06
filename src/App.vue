@@ -66,7 +66,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
         <span class="host num">{{ store.host?.name }}</span>
       </div>
       <nav class="tabs-top" aria-label="Sections">
-        <button v-for="v in VIEWS" :key="v.to" type="button" :aria-current="route.name === v.to ? 'page' : undefined" @click="go(v.to)">{{ v.label }}<span v-if="badge(v.to)" class="badge" :aria-label="badgeLabel(v.to)">{{ badge(v.to) }}</span></button>
+        <button v-for="v in VIEWS" :key="v.to" type="button" :aria-current="route.name === v.to ? 'page' : undefined" @click="go(v.to)">{{ v.label }}<span v-if="badge(v.to)" class="badge" :class="{ warn: v.to === 'settings' }" :aria-label="badgeLabel(v.to)">{{ badge(v.to) }}</span></button>
       </nav>
       <div class="sys" role="group" aria-label="Host usage">
         <span v-for="[l, p] in sys" :key="l"><span class="lbl">{{ l }}</span><span class="num" :class="p != null && useCls(p)">{{ p != null ? p.toFixed(0) + '%' : '·' }}</span></span>
@@ -77,7 +77,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
     <nav class="tabbar" aria-label="Sections">
       <button v-for="v in VIEWS" :key="v.to" type="button" :aria-current="route.name === v.to ? 'page' : undefined" @click="go(v.to)">
         <AppIcon :name="v.icon" />{{ v.label }}
-        <span v-if="badge(v.to)" class="badge" :aria-label="badgeLabel(v.to)">{{ badge(v.to) }}</span>
+        <span v-if="badge(v.to)" class="badge" :class="{ warn: v.to === 'settings' }" :aria-label="badgeLabel(v.to)">{{ badge(v.to) }}</span>
       </button>
     </nav>
   </template>

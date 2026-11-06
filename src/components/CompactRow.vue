@@ -19,7 +19,7 @@ const label = computed(() => `${props.c.name}, ${v.value.word}, ${pcts.value.map
   <li class="row" :class="{ sel, stale: store.dockerDown }">
     <button type="button" class="hit compact" :data-id="c.id" :aria-current="sel ? 'true' : undefined" :aria-label="label" @click="$emit('select')">
       <Led :sev="v.sev" :blink="v.blink" />
-      <span class="rh"><span class="name"><span v-if="rest !== c.name" class="pre">dockbench-</span>{{ rest }}</span><span v-if="v.sev !== 'ok'" class="state" :class="'s-' + v.sev">{{ v.word }}</span>
+      <span class="rh"><span class="name" :title="c.name">{{ rest }}</span><span v-if="v.sev !== 'ok'" class="state" :class="'s-' + v.sev">{{ v.word }}</span>
         <span class="pcts" aria-hidden="true"><span v-for="[l, p] in pcts" :key="l"><span class="lbl">{{ l }}</span><span class="num" :class="useCls(p)">{{ p.toFixed(0) }}%</span></span></span></span>
     </button>
   </li>

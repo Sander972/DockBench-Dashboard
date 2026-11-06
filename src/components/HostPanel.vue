@@ -31,6 +31,6 @@ const census = computed(() => STATES.map(([s, l]) => [l, store.containers.filter
       <div class="chan"><span class="lbl">RAM</span><Meter :pct="hostUse?.mem ?? 0" label="Host memory" /><span class="v num">{{ h ? `${toGiB(h.memUsed).toFixed(1)}/${toGiB(h.memTotal).toFixed(1)}G` : '·' }}</span></div>
       <div class="chan"><span class="lbl">Disk</span><Meter :pct="hostUse?.disk ?? 0" label="Host disk" /><span class="v num">{{ h ? `${toGiB(h.diskUsed).toFixed(0)}/${toGiB(h.diskTotal).toFixed(0)}G` : '·' }}</span></div>
     </div>
-    <div v-if="store.containers.length || !store.dockerDown" class="census"><span><span class="num">devnet</span></span><span><b>{{ store.loading ? '·' : store.containers.length }}</b> containers</span><template v-if="!store.loading"><span v-for="[l, n] in census" :key="l"><b>{{ n }}</b> {{ l }}</span></template></div>
+    <div v-if="store.containers.length || !store.dockerDown" class="census"><span><span class="num">devnet</span><span><b>{{ store.loading ? '·' : store.containers.length }}</b> containers</span></span><span v-if="!store.loading"><span v-for="[l, n] in census" :key="l"><b>{{ n }}</b> {{ l }}</span></span></div>
   </section>
 </template>
