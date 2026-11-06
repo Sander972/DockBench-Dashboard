@@ -216,7 +216,7 @@ onUpdated(() => {
           </section>
 
           <section v-if="store.ci[c.name]" class="sec" :aria-labelledby="'ci-' + c.id">
-            <div class="sec-h ci-h"><h3 :id="'ci-' + c.id" class="lbl">CI · GitHub Actions</h3><span class="src-note">{{ store.ci[c.name].repo }}</span><a class="btn sm" :href="actionsUrl(store.ci[c.name].repo)" target="_blank" rel="noopener">All runs on GitHub <AppIcon name="ext" /></a></div>
+            <div class="sec-h ci-h"><h3 :id="'ci-' + c.id" class="lbl">CI<span class="ci-long"> · GitHub Actions</span></h3><span class="src-note">{{ store.ci[c.name].repo }}</span><a class="btn sm" :href="actionsUrl(store.ci[c.name].repo)" target="_blank" rel="noopener">All runs on GitHub <AppIcon name="ext" /></a></div>
             <CiRuns :a="store.ci[c.name]" no-link />
           </section>
         </div>

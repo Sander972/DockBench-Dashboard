@@ -300,6 +300,7 @@ a.src-note:hover{color:var(--fg)}
 /* CI header: title left, repo centered, GitHub button right, on one row */
 .ci-h{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center}
 .ci-h > h3{white-space:nowrap}
+@container (min-width:720px){.duo > .sec:not(:only-child) .ci-long{display:none}} /* half width beside Git: title shortened to "CI" */
 .ci-h > .src-note{text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .btn.inl{margin-left:8px}
 .duo dl.facts{grid-template-columns:minmax(5.5rem,auto) minmax(0,1fr);gap:6px 12px}
