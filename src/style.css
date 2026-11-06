@@ -272,7 +272,7 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 .vital .big{font-size:1.125rem;font-weight:500;letter-spacing:-.01em}
 .v-sub{font-size:.75rem;color:var(--fg-2)}
 .vital .c-cpu{color:var(--t-cpu)} .vital .c-mem{color:var(--t-mem)}
-.trend-plot{position:relative;height:88px;padding-top:16px}
+.trend-plot{position:relative;height:72px}
 .trend svg{display:block;width:100%;height:100%;touch-action:pan-y;cursor:crosshair;overflow:visible}
 .trend .grid{stroke:var(--line);stroke-dasharray:2 3;vector-effect:non-scaling-stroke}
 .trend .base{stroke:var(--line);vector-effect:non-scaling-stroke}
@@ -280,8 +280,8 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 .trend .ln.cpu{stroke:var(--t-cpu)}
 .trend .ln.mem{stroke:var(--t-mem)}
 .trend .xh{stroke:var(--fg-3);vector-effect:non-scaling-stroke}
-.ax{position:absolute;top:0;font-size:.625rem;line-height:1;color:var(--fg-3);pointer-events:none}
-.ax-l{left:0;white-space:nowrap} .ax .t-cpu{color:var(--t-cpu)} .ax .t-mem{color:var(--t-mem)}
+.ax{position:absolute;top:0;font-size:.625rem;line-height:1;color:var(--fg-3);pointer-events:none;background:var(--plate);padding:2px 4px;border-radius:3px} /* the plate under the text keeps lines and the crosshair from running through it */
+.ax-l{left:0;top:0;display:grid;gap:3px;white-space:nowrap} /* scale tops, CPU over RAM, inside the plot */ .ax .t-cpu{color:var(--t-cpu)} .ax .t-mem{color:var(--t-mem)}
 .ax-h{left:50%;transform:translateX(-50%);white-space:nowrap;color:var(--fg-2)}
 @container (max-width:479.98px){.ax-h{left:auto;right:0;transform:none}} /* beside the max label instead of over it */
 

@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useNow } from '../composables/useNow'
 import { ago, gib, toGiB } from '../lib/format'
 
-// CPU and RAM history of one container on one chart, each line on its own scale from 0 to its own max (both maxes named top left, in the line colors), so a container that idles at 1% CPU still shows its shape next to its memory; no legend: the CPU and RAM labels in the vitals above carry the line colors, and a hovered sample's values show at the top center
+// CPU and RAM history of one container on one chart, each line on its own scale from 0 to its own max (both maxes stacked inside the plot top left, in the line colors), so a container that idles at 1% CPU still shows its shape next to its memory; no legend: the CPU and RAM labels in the vitals above carry the line colors, and a hovered sample's values show at the top center
 const props = defineProps<{ t: number[]; cpu: number[]; mem: number[] }>()
 const now = useNow()
 
@@ -39,7 +39,7 @@ const fmt = (v: number) => String(+v.toPrecision(3))
 <template>
   <div class="trend">
     <div class="trend-plot">
-      <span class="ax ax-l num">max: <span class="t-cpu">{{ fmt(cpuTop) }}%</span> • <span class="t-mem">{{ fmt(memTop) }} GiB</span></span>
+      <span class="ax ax-l num"><span class="t-cpu">{{ fmt(cpuTop) }}%</span><span class="t-mem">{{ fmt(memTop) }} GiB</span></span>
       <span v-if="hover !== null" class="ax ax-h num">{{ cpuNow.toFixed(1) }}% · {{ gib(toGiB(memNow)) }} GiB · {{ when }}</span>
       <svg :viewBox="`0 0 ${W} ${H}`" preserveAspectRatio="none" role="img" :aria-label="`CPU and RAM, last ${cpu.length} samples`" @pointerdown="move" @pointermove="move" @pointerleave="hover = null">
         <line class="grid" x1="0" :x2="W" :y1="H / 2" :y2="H / 2" />
