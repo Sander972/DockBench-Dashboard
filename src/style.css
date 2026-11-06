@@ -281,8 +281,9 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 .trend .ln.mem{stroke:var(--t-mem)}
 .trend .xh{stroke:var(--fg-3);vector-effect:non-scaling-stroke}
 .ax{position:absolute;top:0;font-size:.625rem;line-height:1;color:var(--fg-3);pointer-events:none}
-.ax-l{left:0;color:var(--t-cpu)} .ax-r{right:0;color:var(--t-mem)}
+.ax-l{left:0;white-space:nowrap} .ax .t-cpu{color:var(--t-cpu)} .ax .t-mem{color:var(--t-mem)}
 .ax-h{left:50%;transform:translateX(-50%);white-space:nowrap;color:var(--fg-2)}
+@container (max-width:479.98px){.ax-h{left:auto;right:0;transform:none}} /* beside the max label instead of over it */
 
 /* paired sections side by side once the detail column has the room (Git | CI, Environment | Container) */
 .duo{display:grid;min-width:0}
