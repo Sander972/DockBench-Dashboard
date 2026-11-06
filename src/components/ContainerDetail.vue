@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { applyConfig, cancelStepUp, checkImages, confirmStepUp, containerAction, gitExec, loadClaudeDiff, loadVscode, pullClaudeConfig, refreshLogs, replaceVscode, store, switchClaudeAccount, toast } from '../store'
 import { prefs } from '../composables/usePrefs'
 import { useNow } from '../composables/useNow'
-import { ago, DISK_BUDGET, dur, gib, ms, repoLabel, repoUrl, since, toGiB } from '../lib/format'
+import { ago, DISK_BUDGET, dur, gib, ms, repoLabel, repoUrl, since, toGiB, useCls } from '../lib/format'
 import { cpuPct, diskBytes, diskPct, memPct, verdict } from '../lib/verdict'
 import { diffRows } from '../lib/diff'
 import AppIcon from './AppIcon.vue'
@@ -14,7 +14,6 @@ import DeviceCodeCallout from './DeviceCodeCallout.vue'
 import ExecPanel from './ExecPanel.vue'
 import HoldButton from './HoldButton.vue'
 import Led from './Led.vue'
-import Meter from './Meter.vue'
 import StepUpPanel from './StepUpPanel.vue'
 import TrendChart from './TrendChart.vue'
 import { actionsUrl } from '../lib/actions'
@@ -190,22 +189,10 @@ onUpdated(() => {
           <div class="sec-h"><h3 :id="'r-' + c.id" class="lbl">Resources</h3><span class="src-note">Docker stats · every {{ prefs.poll }}s</span></div>
           <div class="vitals">
             <template v-if="run">
-              <div class="vital">
-                <div class="v-top"><span class="lbl">CPU</span><span class="num big">{{ cpuPct(c).toFixed(1) }}%</span></div>
-                <Meter :pct="cpuPct(c)" label="CPU" size="lg" />
-                <span class="v-sub num">{{ ((cpuPct(c) / 100) * ncpu).toFixed(1) }} of {{ ncpu }} cores</span>
-              </div>
-              <div class="vital">
-                <div class="v-top"><span class="lbl">RAM</span><span class="num big">{{ memPct(c).toFixed(0) }}%</span></div>
-                <Meter :pct="memPct(c)" label="Memory" size="lg" />
-                <span class="v-sub num">{{ gib(toGiB(c.memUsed)) }} of {{ gib(toGiB(c.memLimit)) }} GiB</span>
-              </div>
+              <div class="vital"><span class="lbl">CPU</span><span class="num big" :class="useCls(cpuPct(c))">{{ cpuPct(c).toFixed(1) }}%</span><span class="num v-sub">{{ ((cpuPct(c) / 100) * ncpu).toFixed(1) }}/{{ ncpu }} cores</span></div>
+              <div class="vital"><span class="lbl">RAM</span><span class="num big" :class="useCls(memPct(c))">{{ memPct(c).toFixed(0) }}%</span><span class="num v-sub">{{ gib(toGiB(c.memUsed)) }}/{{ gib(toGiB(c.memLimit)) }} GiB</span></div>
             </template>
-            <div class="vital disk">
-              <div class="v-top"><span class="lbl">Disk</span><span class="num big">{{ gib(toGiB(diskBytes(c))) }} GiB</span></div>
-              <Meter :pct="diskPct(c)" label="Disk" size="lg" />
-              <span class="v-sub num" :title="`Writable layer ${gib(toGiB(c.diskRw))} GiB, /home/dev volume ${gib(toGiB(c.diskVolume))} GiB, budget ${toGiB(DISK_BUDGET)} GiB`">{{ gib(toGiB(c.diskRw)) }} layer + {{ gib(toGiB(c.diskVolume)) }} home of {{ toGiB(DISK_BUDGET) }}</span>
-            </div>
+            <div class="vital" :title="`Writable layer ${gib(toGiB(c.diskRw))} GiB, /home/dev volume ${gib(toGiB(c.diskVolume))} GiB, budget ${toGiB(DISK_BUDGET)} GiB`"><span class="lbl">Disk</span><span class="num big" :class="useCls(diskPct(c))">{{ diskPct(c).toFixed(0) }}%</span><span class="num v-sub">{{ gib(toGiB(diskBytes(c))) }}/{{ toGiB(DISK_BUDGET) }} GiB</span></div>
           </div>
           <TrendChart v-if="run" :t="hist.t" :cpu="hist.cpu" :mem="hist.mem" />
           <p v-else class="fine">Docker reports no CPU or memory for a {{ c.state === 'exited' ? 'stopped' : c.state }} container.</p>
