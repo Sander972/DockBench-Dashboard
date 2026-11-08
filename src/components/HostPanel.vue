@@ -44,7 +44,7 @@ const census = computed(() => STATES.map(([s, l]) => [l, store.containers.filter
       <code>{{ store.downError }}</code>
     </div>
     <div v-else class="chans">
-      <div class="chan"><span class="lbl">CPU</span><Meter :pct="hostUse?.cpu ?? 0" label="Host CPU" :off="noCollector" /><span class="v num">{{ h && !noCollector ? hostUse!.cpu.toFixed(0) + '%' : '·' }}</span></div>
+      <div class="chan"><span class="lbl">CPU</span><Meter :pct="hostUse?.cpu ?? 0" label="Host CPU" :off="noCollector" /><span class="v num">{{ h && !noCollector ? (hostUse!.cpu ?? 0).toFixed(0) + '%' : '·' }}</span></div>
       <div class="chan"><span class="lbl">RAM</span><Meter :pct="hostUse?.mem ?? 0" label="Host memory" :off="noCollector" /><span class="v num">{{ h && !noCollector ? `${toGiB(h.memUsed).toFixed(1)}/${toGiB(h.memTotal).toFixed(1)}G` : '·' }}</span></div>
       <div class="chan"><span class="lbl">Disk</span><Meter :pct="hostUse?.disk ?? 0" label="Host disk" /><span class="v num">{{ h ? `${toGiB(h.diskUsed).toFixed(0)}/${toGiB(h.diskTotal).toFixed(0)}G` : '·' }}</span></div>
     </div>

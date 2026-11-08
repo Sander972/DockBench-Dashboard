@@ -9,7 +9,7 @@ import Led from '../components/Led.vue'
 import StackedArea, { type Series } from '../components/StackedArea.vue'
 import UsageTable, { type UsageRow } from '../components/UsageTable.vue'
 
-onBeforeUnmount(watchUsage())
+onBeforeUnmount(watchUsage({ top: true }))
 const d = computed(() => store.usage.data)
 const sp = computed(() => (d.value ? span(d.value) : { from: 0, to: 0 }))
 const WINDOWS: UsageWindow[] = ['1h', '6h', '24h']

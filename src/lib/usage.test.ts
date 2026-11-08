@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { Utilization } from '../types'
-import { byName, containerSeries, hostSeries, summarize, topByName } from './usage'
+import { byName, containerSeries, hostPcts, hostSeries, summarize, topByName } from './usage'
 
 const GiB = 2 ** 30
 // three 10 s points; a1 and a2 are the same container before and after a recreate, both named shop; db runs throughout
@@ -20,6 +20,16 @@ const u: Utilization = {
   processes: [{ comm: 'node', pids: [7, 11], container: 'a2', cpuPct: 13, rss: 2 * GiB }],
   names: { a1: { name: 'shop', dockbench: false }, a2: { name: 'shop', dockbench: true }, d1: { name: 'db', dockbench: false } },
 }
+
+describe('hostPcts', () => {
+  const h = { name: 'h', ncpu: 4, memTotal: 8, diskTotal: 100, dockerVersion: 'x', cpuPct: 30, memUsed: 2, stealPct: 0, load1: 0, psiCpuSome10: 0, collector: true, diskUsed: 25, polledAt: '', reachable: true }
+  test('gives the meter percentages', () => {
+    expect(hostPcts(h)).toEqual({ cpu: 30, mem: 25, disk: 25 })
+  })
+  test('CPU and RAM are unknown, not 0, without the collector; disk stays', () => {
+    expect(hostPcts({ ...h, cpuPct: 0, memUsed: 0, collector: false })).toEqual({ cpu: null, mem: null, disk: 25 })
+  })
+})
 
 describe('usage', () => {
   test('hostSeries maps the host figures of every point', () => {
@@ -41,15 +51,16 @@ describe('usage', () => {
     expect(containerSeries(u, ['a2']).mem).toEqual([{ t: 20_000, v: GiB }, { t: 30_000, v: 3 * GiB }])
   })
 
-  test('the host group is what the host used outside every container', () => {
-    expect(containerSeries(u, ['host']).cpu).toEqual([{ t: 10_000, v: 20 }, { t: 20_000, v: 20 }, { t: 30_000, v: 20 }])
+  test('the host group is what the host used outside every container, steal left out', () => {
+    // host cpuPct counts steal, the containers' cgroup time does not: 50 - 1 steal - 30, 60 - 2 - 40, 40 - 0 - 20
+    expect(containerSeries(u, ['host']).cpu).toEqual([{ t: 10_000, v: 19 }, { t: 20_000, v: 18 }, { t: 30_000, v: 20 }])
     expect(containerSeries(u, ['host']).mem[0]).toEqual({ t: 10_000, v: 7 * GiB })
   })
 
   test('summarize gives the current figures from the snapshot and the window average and peak', () => {
     expect(summarize(u, ['a1', 'a2'])).toEqual({ cur: 14, avg: 65 / 3, peak: 30, mem: 3 * GiB })
     // the host group has no snapshot figure: its current value is the newest point
-    expect(summarize(u, ['host'])).toMatchObject({ cur: 20, avg: 20, peak: 20, mem: 5 * GiB })
+    expect(summarize(u, ['host'])).toMatchObject({ cur: 20, avg: 19, peak: 20, mem: 5 * GiB })
   })
 
   test('topByName merges a name across ids, takes current pids and cpu from the snapshot and sorts by average', () => {

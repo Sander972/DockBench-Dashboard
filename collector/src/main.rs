@@ -1,10 +1,10 @@
 use dockbench_collector::history::{History, Point};
 use dockbench_collector::http::{self, State};
-use dockbench_collector::sample::{Sampler, SamplerCfg};
+use dockbench_collector::sample::{Sampler, SamplerCfg, Snapshot};
 use std::env;
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Runtime settings from the environment, with the defaults of the compose service.
@@ -40,20 +40,21 @@ impl Config {
 }
 
 /// Samples every interval forever: the latest snapshot for /metrics, and one history point per full step.
-fn sample_loop(cfg: Config, state: Arc<Mutex<State>>) {
+fn sample_loop(cfg: Config, state: Arc<State>) {
     let mut sampler = Sampler::new(cfg.sampler());
     let interval = Duration::from_millis(cfg.interval_ms);
+    // the samples of the step in progress, folded into one history point when the step is full
+    let mut pending: Vec<Snapshot> = Vec::new();
     loop {
         let started = Instant::now();
         if let Some(snap) = sampler.tick() {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            st.latest = Some(snap.clone());
-            st.pending.push(snap);
-            let span = st.pending.last().unwrap().at - st.pending[0].at + cfg.interval_ms;
+            *state.latest.lock().unwrap_or_else(|e| e.into_inner()) = Some(snap.clone());
+            pending.push(snap);
+            let span = pending.last().unwrap().at - pending[0].at + cfg.interval_ms;
             if span >= cfg.history_step_ms {
-                let point = Point::from_samples(&st.pending);
-                st.pending.clear();
-                st.history.push(point);
+                let point = Point::from_samples(&pending);
+                pending.clear();
+                state.history.lock().unwrap_or_else(|e| e.into_inner()).push(point);
             }
         }
         std::thread::sleep(interval.saturating_sub(started.elapsed()));
@@ -80,7 +81,7 @@ fn main() {
         std::process::exit(1);
     });
     let history = History::open(&cfg.data_dir, cfg.history_hours * 3_600_000);
-    let state = Arc::new(Mutex::new(State { latest: None, history, pending: Vec::new() }));
+    let state = Arc::new(State::new(history));
     eprintln!("dockbench-collector listening on :{}, interval {} ms, step {} ms, keep {} h", cfg.port, cfg.interval_ms, cfg.history_step_ms, cfg.history_hours);
     let s = state.clone();
     std::thread::spawn(move || sample_loop(cfg, s));

@@ -51,6 +51,10 @@ test('history asks the window and step and throws on 503', async () => {
   expect(q.get('step')).toBe('60000')
   expect(Number(q.get('to')) - Number(q.get('from'))).toBe(21_600_000)
   expect(Number(q.get('to'))).toBe(100_000_000)
+  expect(q.get('top')).toBe('1')
+  requests = []
+  await history(base, '1h', 100_000_000, false)
+  expect(requests[0].searchParams.get('top')).toBe('0')
   expect(WINDOWS['24h']).toEqual({ ms: 86_400_000, stepMs: 240_000 })
   fake = () => new Response('down', { status: 503 })
   await expect(history(base, '1h')).rejects.toThrow()

@@ -20,8 +20,8 @@ export interface Api {
   signOut(all?: boolean): Promise<void>
   getHost(): Promise<HostUsage>
   getContainers(): Promise<DevContainer[]>
-  // the collector's history over a window with its latest snapshot; fails with 'collector unreachable' when it does not answer
-  getUtilization(window: UsageWindow): Promise<Utilization>
+  // the collector's history over a window with its latest snapshot; top false leaves the per-process lists out; fails with 'collector unreachable' when it does not answer
+  getUtilization(window: UsageWindow, top: boolean): Promise<Utilization>
   getLogs(id: string): Promise<string[]>
   // update answers UpdateResult, remove RemoveResult, the others {}
   containerAction(id: string, action: ContainerAction): Promise<Partial<UpdateResult> & Partial<RemoveResult>>

@@ -600,16 +600,19 @@ export const routes = {
 
   '/api/host': auth(async () => json(await hostView())),
   '/api/containers': auth(async () => json(await containersView())),
-  // Utilization in src/types.ts: the collector's history over a window plus its latest snapshot, with every container id resolved to a name and the dockbench flag
+  // Utilization in src/types.ts: the collector's history over a window plus its latest snapshot, with every container id resolved to a name and the dockbench flag. top=0 leaves the per-process lists out (the Bench graphs). Gzipped when the browser accepts it: a day of points with process lists is about 2 MB of JSON, refetched every 10 s while a graph shows.
   '/api/utilization': auth(async (req) => {
-    const w = new URL(req.url).searchParams.get('window') ?? '1h'
+    const q = new URL(req.url).searchParams
+    const w = q.get('window') ?? '1h'
     if (!Object.hasOwn(WINDOWS, w)) throw new HttpError(400, 'window must be 1h, 6h or 24h')
-    const [h, snap] = await Promise.all([env.collectorUrl ? collectorHistory(env.collectorUrl, w as Window).catch(() => null) : null, collector.latest()])
+    const [h, snap] = await Promise.all([env.collectorUrl ? collectorHistory(env.collectorUrl, w as Window, Date.now(), q.get('top') !== '0').catch(() => null) : null, collector.latest()])
     if (!h || !snap) return json({ error: 'collector unreachable' }, 503)
     const names: Record<string, { name: string; dockbench: boolean }> = {}
     for (const p of h.points) for (const [id, c] of Object.entries(p.containers)) names[id] = { name: c.name, dockbench: false }
     for (const c of snap.containers) names[c.id] = { name: c.name, dockbench: c.dockbench }
-    return json({ window: w, stepMs: h.stepMs, at: snap.at, points: h.points, containers: snap.containers, processes: snap.processes, names })
+    const body = JSON.stringify({ window: w, stepMs: h.stepMs, at: snap.at, points: h.points, containers: snap.containers, processes: snap.processes, names })
+    if (!/\bgzip\b/.test(req.headers.get('accept-encoding') ?? '')) return new Response(body, { headers: { 'content-type': 'application/json', vary: 'accept-encoding' } })
+    return new Response(Bun.gzipSync(body), { headers: { 'content-type': 'application/json', 'content-encoding': 'gzip', vary: 'accept-encoding' } })
   }),
   // Server-Sent Events: `snapshot` {host, containers} every 2 s, `down` {error} while Docker does not answer, `signed-out` {} then close when the session is gone. Cached nowhere (no-store, X-Accel-Buffering: no for nginx).
   '/api/live': auth(async (req: BunRequest<'/api/live'>, server) => { server.timeout(req, 0); return live.handle(sessionId(req)!) }),

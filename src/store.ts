@@ -10,6 +10,7 @@ import { painted } from './lib/paint'
 import { DEFAULT_IMAGE, deployErrors, slug, type DeployDraft } from './lib/deploy'
 import { gitMsg } from './lib/format'
 import { finishedRuns, runWord } from './lib/actions'
+import { hostPcts } from './lib/usage'
 
 export interface Confirm { target: string; action: Guarded; waiting: boolean } // target is a container id or 'deploy'
 export interface ExecState extends ExecResult { kind: GitKind; running: boolean; msg: string }
@@ -78,7 +79,7 @@ const find = (id: string) => store.containers.find(c => c.id === id)
 
 let toastT: ReturnType<typeof setTimeout> | undefined
 function newUsage() {
-  return { window: '1h' as UsageWindow, data: null as Utilization | null, error: null as string | null, at: 0, watchers: 0 }
+  return { window: '1h' as UsageWindow, data: null as Utilization | null, error: null as string | null, at: 0, watchers: 0, topWatchers: 0 }
 }
 
 export function toast(msg: string, ms = 3200) {
@@ -104,10 +105,7 @@ export const ciFailCount = computed(() => Object.values(store.ci).filter(a => a.
 
 export const updatesCount = computed(() => [store.system?.dashboard, store.system?.telegram].filter(r => r?.imageUpdate).length)
 
-export const hostUse = computed(() => {
-  const h = store.host
-  return h ? { cpu: h.cpuPct, mem: h.memTotal && (h.memUsed / h.memTotal) * 100, disk: h.diskTotal && (h.diskUsed / h.diskTotal) * 100 } : null
-})
+export const hostUse = computed(() => (store.host ? hostPcts(store.host) : null))
 
 // Bench list: compact shows running only; search matches name, repo and branch
 export function visibleContainers(q: string, sort: SortKey) {
@@ -879,9 +877,6 @@ async function runTelegram(op: TgOp) {
   if (op !== 'claim') loadActivity()
 }
 
-/* ---------- dashboard and bot images ---------- */
-
-// quiet: a failing background load must not toast every 5 minutes, the panel shows the last answer
 /* ---------- usage (the collector's history) ---------- */
 
 let usageTimer: ReturnType<typeof setInterval> | undefined
@@ -889,7 +884,7 @@ let usageTimer: ReturnType<typeof setInterval> | undefined
 export async function loadUsage() {
   const w = store.usage.window
   try {
-    const data = await api.getUtilization(w)
+    const data = await api.getUtilization(w, store.usage.topWatchers > 0)
     if (store.usage.window !== w) return
     store.usage.data = data
     store.usage.error = null
@@ -908,17 +903,21 @@ function stopUsage() {
   usageTimer = undefined
 }
 
-// every mounted graph registers here: the first one loads and starts a 10 s refresh, the last one to leave stops it, so one open dashboard asks once every 10 s however many graphs it shows. Call the returned function on unmount.
-export function watchUsage(): () => void {
-  if (store.usage.watchers++ === 0) {
-    loadUsage()
-    usageTimer = setInterval(() => { if (!asleep()) loadUsage() }, 10_000)
-  }
+// every mounted graph registers here: the first one loads and starts a 10 s refresh, the last one to leave stops it, so one open dashboard asks once every 10 s however many graphs it shows. top: the watcher needs the per-process lists (the Usage page); without one the answer leaves them out, about a fifth of the bytes. Call the returned function on unmount.
+export function watchUsage(opts: { top?: boolean } = {}): () => void {
+  const u = store.usage
+  const first = u.watchers++ === 0
+  const firstTop = !!opts.top && u.topWatchers++ === 0
+  if (first) usageTimer = setInterval(() => { if (!asleep()) loadUsage() }, 10_000)
+  // the lists are needed now, not at the next tick
+  if (first || firstTop) loadUsage()
   let done = false
   return () => {
-    if (done) return
+    // a sign-out in between replaced the slice, whose counters start again from 0
+    if (done || store.usage !== u) return
     done = true
-    if (--store.usage.watchers === 0) stopUsage()
+    if (opts.top) u.topWatchers--
+    if (--u.watchers === 0) stopUsage()
   }
 }
 
@@ -929,6 +928,9 @@ export function setUsageWindow(w: UsageWindow) {
   loadUsage()
 }
 
+/* ---------- dashboard and bot images ---------- */
+
+// quiet: a failing background load must not toast every 5 minutes, the panel shows the last answer
 export async function loadSystem() {
   try { store.system = await api.getSystem() } catch (e) { if (e instanceof SignedOut) expire() }
 }

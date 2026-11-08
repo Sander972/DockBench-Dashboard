@@ -34,9 +34,10 @@ export async function latest(base: string, timeoutMs = 1000): Promise<Snapshot |
   }
 }
 
-export async function history(base: string, w: Window, now = Date.now()): Promise<{ stepMs: number; points: HistoryPoint[] }> {
+// top false leaves the per-process lists out (empty `top` per point): the graphs outside the Usage page need only host and container figures, about a fifth of the bytes
+export async function history(base: string, w: Window, now = Date.now(), top = true): Promise<{ stepMs: number; points: HistoryPoint[] }> {
   const { ms, stepMs } = WINDOWS[w]
-  const res = await fetch(`${base}/history?from=${now - ms}&to=${now}&step=${stepMs}`, { signal: AbortSignal.timeout(5000) })
+  const res = await fetch(`${base}/history?from=${now - ms}&to=${now}&step=${stepMs}&top=${top ? 1 : 0}`, { signal: AbortSignal.timeout(5000) })
   if (!res.ok) throw new Error(`collector history returned ${res.status}`)
   return (await res.json()) as { stepMs: number; points: HistoryPoint[] }
 }

@@ -216,6 +216,26 @@ test('utilization resolves names', async () => {
   }
 })
 
+test('utilization leaves the process lists to the collector when asked and answers gzip', async () => {
+  const seen: URL[] = []
+  const point = { t: 900, host: { cpuPct: 1, stealPct: 0, memUsed: 1, load1: 1 }, containers: {}, top: {} }
+  const inner = collectorWith([point])
+  collectorFake = (req) => (seen.push(new URL(req.url)), inner(req))
+  await collectorTtl()
+  try {
+    const res = await fetch(`${base}/api/utilization?window=1h&top=0`, { headers: { cookie: session, 'accept-encoding': 'gzip' } })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-encoding')).toBe('gzip')
+    expect(((await res.json()) as { points: unknown[] }).points).toEqual([point])
+    expect(seen.find((u) => u.pathname === '/history')?.searchParams.get('top')).toBe('0')
+    seen.length = 0
+    await fetch(`${base}/api/utilization?window=1h`, { headers: { cookie: session } })
+    expect(seen.find((u) => u.pathname === '/history')?.searchParams.get('top')).toBe('1')
+  } finally {
+    collectorFake = null
+  }
+})
+
 test('unknown api paths answer 404 json, not the app', async () => {
   const res = await fetch(`${base}/api/auth/nope/options`, { method: 'POST', headers: { cookie: session } })
   expect(res.status).toBe(404)

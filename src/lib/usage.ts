@@ -1,5 +1,5 @@
 // Pure views over the /api/utilization answer. Containers are keyed by id in the collector and by name here: the ids of one name (a container recreated during the window) join into one row and one series. The key 'host' stands for what the host used outside every container.
-import type { UsageWindow, Utilization } from '../types'
+import type { HostUsage, UsageWindow, Utilization } from '../types'
 
 export interface Pt { t: number; v: number }
 
@@ -11,6 +11,12 @@ export const WINDOW_LABEL: Record<UsageWindow, string> = { '1h': 'Last hour', '6
 // the time span a graph draws: the window ending at the collector's latest sample
 export function span(u: Utilization): { from: number; to: number } {
   return { from: u.at - WINDOW_MS[u.window], to: u.at }
+}
+
+// the host meters: CPU and RAM come from the collector, so without it they are unknown (null), not 0; disk is the server's own statfs
+export function hostPcts(h: HostUsage): { cpu: number | null; mem: number | null; disk: number } {
+  const usage = h.collector !== false
+  return { cpu: usage ? h.cpuPct : null, mem: usage ? h.memTotal && (h.memUsed / h.memTotal) * 100 : null, disk: h.diskTotal && (h.diskUsed / h.diskTotal) * 100 }
 }
 
 export function hostSeries(u: Utilization): { cpu: Pt[]; steal: Pt[]; mem: Pt[] } {
@@ -35,13 +41,13 @@ export function byName(u: Utilization): Map<string, { ids: string[]; dockbench: 
 
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0)
 
-// the sum over the ids per point, leaving out points where none of them ran, so a container that did not exist yet is a gap; ['host'] is the host total minus every container
+// the sum over the ids per point, leaving out points where none of them ran, so a container that did not exist yet is a gap; ['host'] is the host total minus every container (and, for CPU, minus steal: the host's busy time counts it, cgroup time does not)
 export function containerSeries(u: Utilization, ids: string[]): { cpu: Pt[]; mem: Pt[] } {
   const cpu: Pt[] = [], mem: Pt[] = []
   for (const p of u.points) {
     const cs = Object.values(p.containers)
     if (ids.length === 1 && ids[0] === HOST) {
-      cpu.push({ t: p.t, v: Math.max(0, p.host.cpuPct - sum(cs.map((c) => c.cpuPct))) })
+      cpu.push({ t: p.t, v: Math.max(0, p.host.cpuPct - p.host.stealPct - sum(cs.map((c) => c.cpuPct))) })
       mem.push({ t: p.t, v: Math.max(0, p.host.memUsed - sum(cs.map((c) => c.memUsed))) })
       continue
     }

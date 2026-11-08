@@ -9,3 +9,12 @@ test('a failed deploy keeps the call trace from the server', async () => {
   expect(e.calls).toEqual(calls)
   vi.unstubAllGlobals()
 })
+
+test('utilization asks for the process lists only when told to', async () => {
+  const paths: string[] = []
+  vi.stubGlobal('fetch', async (p: string) => (paths.push(p), new Response('{}', { headers: { 'content-type': 'application/json' } })))
+  await http.getUtilization('6h', true)
+  await http.getUtilization('1h', false)
+  expect(paths).toEqual(['/api/utilization?window=6h&top=1', '/api/utilization?window=1h&top=0'])
+  vi.unstubAllGlobals()
+})

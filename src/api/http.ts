@@ -73,7 +73,7 @@ export const http: Api = {
   stepUp: async () => (await passkey<{ stepUpUntil: number }>('/api/auth/step-up')).stepUpUntil,
   signOut: all => req('POST', '/api/auth/logout', all ? { all: true } : {}),
   getHost: () => req('GET', '/api/host'),
-  getUtilization: (window) => req('GET', `/api/utilization?window=${window}`),
+  getUtilization: (window, top) => req('GET', `/api/utilization?window=${window}&top=${top ? 1 : 0}`),
   getContainers: () => req('GET', '/api/containers'),
   getLogs: id => req('GET', `/api/containers/${id}/logs?tail=100`),
   containerAction: (id, action) => req('POST', `/api/containers/${id}/${action}`),
