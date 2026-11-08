@@ -1,8 +1,10 @@
-// The dashboard itself and the Telegram bot as images the dashboard can check and update, for the Updates panel in Settings. Kept free of env so tests drive it with fakes.
+// The dashboard itself, its usage collector and the Telegram bot as images the dashboard can check and update, for the Updates panel in Settings. Kept free of env so tests drive it with fakes.
 import { updateAvailable, type ImageCheck } from './containers'
 import type { ContainerRow, Inspect } from './docker'
 
 export const DASHBOARD_NAME = 'dockbench-dashboard'
+// the collector runs in the dashboard's stack, so it updates with the dashboard
+export const COLLECTOR_NAME = 'dockbench-collector'
 
 // one id per server process: after a self-update the page waits for it to change, then reloads into the new build
 export const BOOT_ID = crypto.randomUUID()

@@ -17,7 +17,7 @@ import { deleteKeys, keyTitle, removeStack, stackKeys } from './remove'
 import { generateDeployKey } from './sshkey'
 import { deviceCode, fetchStatus, imageChecker, lastError, shared, statusTracker, updateAvailable } from './containers'
 import { botName, dockerGid, fetchBotStatus, getMe, setupCode, telegramEnv, TELEGRAM_IMAGE, TELEGRAM_NAME, validToken, type BotStatus } from './telegram'
-import { BOOT_ID, DASHBOARD_NAME, imageRow } from './system'
+import { BOOT_ID, COLLECTOR_NAME, DASHBOARD_NAME, imageRow } from './system'
 import { runsCache, summarize } from './actions'
 import { CONFIG_DIFF_MAX, configDiffCmd, configPullCmd, lastLine, loginCodeCmd, loginStartCmd, loginUrl, logoutCmd, parseConfigDiff } from './claude'
 import { newChallenge, readPasskeys, takeChallenge, userHandle, verifyAssertion, verifyRegistration, writePasskeys, type Guarded, type StoredPasskey } from './passkey'
@@ -240,15 +240,15 @@ async function updateViaStack(req: BunRequest<string>, server: Server<undefined>
 // set when the self-update's restart or redeploy failed after the answer went out, so the page waiting for the new server can stop and say why
 let selfUpdateError: string | null = null
 
-// the Updates panel: the dashboard's own container and the bot's. check pulls both images first (through Portainer, like the dev containers), otherwise the last known answer is used and refreshed in the background.
+// the Updates panel: the dashboard's own container, its collector and the bot. check pulls their images first (through Portainer, like the dev containers), otherwise the last known answer is used and refreshed in the background.
 async function systemView(check: boolean) {
-  const [dashboard, telegram] = await Promise.all([DASHBOARD_NAME, TELEGRAM_NAME].map(async (name) => {
+  const [dashboard, telegram, collector] = await Promise.all([DASHBOARD_NAME, TELEGRAM_NAME, COLLECTOR_NAME].map(async (name) => {
     const c = await containerByName(env.dockerHost, name)
     const x = c ? await inspectContainer(env.dockerHost, c.id) : null
     const k = !x ? null : check && !x.image.includes('@') ? await images.check(x.image) : images.peek(x.image)
     return imageRow(name, c, x, k)
   }))
-  return { bootId: BOOT_ID, dashboard, telegram, selfUpdateError }
+  return { bootId: BOOT_ID, dashboard, telegram, collector, selfUpdateError }
 }
 
 const PAST = { start: 'Started', stop: 'Stopped', restart: 'Restarted' } as const
@@ -1074,7 +1074,7 @@ export const routes = {
   // SystemStatus in src/types.ts
   '/api/system': auth(async () => json(await systemView(false))),
 
-  // pulls the dashboard and bot images now instead of waiting for the 30-minute refresh; a pull can take a while, so the idle timeout is lifted
+  // pulls the dashboard, collector and bot images now instead of waiting for the 30-minute refresh; a pull can take a while, so the idle timeout is lifted
   '/api/system/check': {
     POST: auth(async (req: BunRequest<'/api/system/check'>, server) => {
       server.timeout(req, 0)
@@ -1082,7 +1082,7 @@ export const routes = {
     }),
   },
 
-  // The dashboard updating itself: pull through Portainer, answer, then restart in place (same image) or redeploy its own Portainer stack (new image). Both stop this process, so they run after the answer is out; Portainer and the Docker daemon finish them on their own. The page then waits for a new bootId on /api/system and reloads.
+  // The dashboard updating itself: pull its image and the collector's through Portainer, answer, then restart in place (both on their newest image) or redeploy its own Portainer stack (either image new), so the pair never ends up mismatched. Both stop this process, so they run after the answer is out; Portainer and the Docker daemon finish them on their own. The page then waits for a new bootId on /api/system and reloads.
   '/api/system/dashboard/update': {
     POST: auth(async (req: BunRequest<'/api/system/dashboard/update'>, server) => {
       server.timeout(req, 0)
@@ -1098,7 +1098,17 @@ export const routes = {
         await step('POST', '/images/create', 200, () => pullImage(portainer, x.image))
         const pulled = await step('GET', `/images/${x.image}/json`, 200, () => imageInspect(env.dockerHost, x.image))
         images.check(x.image).catch(() => {})
-        const upToDate = pulled.id === x.imageId
+        // a stack without the collector (deployed before it existed) is not an error
+        const k = await containerByName(env.dockerHost, COLLECTOR_NAME)
+        let collectorCurrent = true
+        if (k) {
+          const kx = await step('GET', `/containers/${k.id.slice(0, 12)}/json`, 200, () => inspectContainer(env.dockerHost, k.id))
+          await step('POST', '/images/create', 200, () => pullImage(portainer, kx.image))
+          const kp = await step('GET', `/images/${kx.image}/json`, 200, () => imageInspect(env.dockerHost, kx.image))
+          images.check(kx.image).catch(() => {})
+          collectorCurrent = kp.id === kx.imageId
+        }
+        const upToDate = pulled.id === x.imageId && collectorCurrent
         let apply = () => containerPost(env.dockerHost, c.id, 'restart') as Promise<unknown>
         if (!upToDate) {
           const stack = await step('GET', '/api/stacks', 200, () => findStack(portainer, x.project ?? c.name))

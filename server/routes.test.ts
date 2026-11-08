@@ -543,6 +543,54 @@ test('remove: refuses a non-stack container and a second remove, then deletes th
   }
 })
 
+test('dashboard update pulls the collector image too and redeploys the stack when only the collector is newer', async () => {
+  const seen: string[] = []
+  const rows: Record<string, { Id: string; img: string; ref: string }> = {
+    'dockbench-dashboard': { Id: 'd1', img: 'sha256:dash', ref: 'ghcr.io/sander972/dockbench-dashboard:latest' },
+    'dockbench-collector': { Id: 'k1', img: 'sha256:old', ref: 'ghcr.io/sander972/dockbench-collector:latest' },
+  }
+  const newest: Record<string, string> = { 'ghcr.io/sander972/dockbench-dashboard:latest': 'sha256:dash', 'ghcr.io/sander972/dockbench-collector:latest': 'sha256:new' }
+  dockerFake = (req) => {
+    const u = new URL(req.url)
+    seen.push(`docker ${req.method} ${u.pathname}`)
+    if (u.pathname === '/containers/json') {
+      const name = (JSON.parse(u.searchParams.get('filters') ?? '{}') as { name?: string[] }).name?.[0]?.slice(2, -1) ?? ''
+      const r = rows[name]
+      return Response.json(r ? [{ Id: r.Id, Names: [`/${name}`], State: 'running', Image: r.ref }] : [])
+    }
+    const r = Object.values(rows).find((x) => u.pathname === `/containers/${x.Id}/json`)
+    if (r) return Response.json({ Image: r.img, State: { Status: 'running', StartedAt: '2026-11-08T10:00:00Z', FinishedAt: '0001-01-01T00:00:00Z', ExitCode: 0 }, RestartCount: 0, HostConfig: { Memory: 0 }, Config: { Env: [], Image: r.ref, Labels: { 'com.docker.compose.project': 'dockbench-dashboard' } }, Mounts: [] })
+    const ref = Object.keys(newest).find((k) => u.pathname === `/images/${k}/json`)
+    if (ref) return Response.json({ Id: newest[ref], RepoDigests: [] })
+    return new Response('down', { status: 500 })
+  }
+  portainerFake = (req) => {
+    const u = new URL(req.url)
+    seen.push(`portainer ${req.method} ${u.pathname}${u.pathname.endsWith('/images/create') ? u.search : ''}`)
+    if (u.pathname === '/api/registries') return Response.json([])
+    if (u.pathname.endsWith('/docker/images/create')) return new Response('{"status":"done"}\n')
+    if (u.pathname === '/api/stacks') return Response.json([{ Id: 5, Name: 'dockbench-dashboard', EndpointId: 1 }])
+    if (u.pathname === '/api/stacks/5/file') return Response.json({ StackFileContent: 'services: {}' })
+    if (u.pathname === '/api/stacks/5') return req.method === 'PUT' ? Response.json({}) : Response.json({ Env: [] })
+    return new Response('down', { status: 500 })
+  }
+  try {
+    const res = await fetch(`${base}/api/system/dashboard/update`, { method: 'POST', headers: { cookie: session, 'sec-fetch-site': 'same-origin' } })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ id: 'd1', upToDate: false, restarting: true })
+    expect(seen).toContain('portainer POST /api/endpoints/1/docker/images/create?fromImage=ghcr.io%2Fsander972%2Fdockbench-collector&tag=latest')
+    await Bun.sleep(1300)
+    expect(seen).toContain('portainer PUT /api/stacks/5')
+    expect(seen).not.toContain('docker POST /containers/d1/restart')
+    const sys = (await (await fetch(`${base}/api/system`, { headers: { cookie: session } })).json()) as Record<string, { name: string; imageUpdate: boolean | null }>
+    expect(sys.collector).toMatchObject({ name: 'dockbench-collector', imageUpdate: true })
+    expect(sys.dashboard).toMatchObject({ imageUpdate: false })
+  } finally {
+    dockerFake = null
+    portainerFake = null
+  }
+})
+
 // last in the file: passkeys.json turns on step-up, undone at the end
 test('passkey sign-in mints a session and a step-up window; guarded actions and passkey changes need that window', async () => {
   const { softKey } = await import('./softkey')

@@ -67,25 +67,29 @@ onBeforeUnmount(cancelStepUp)
 
 /* ---------- updates ---------- */
 
-const images = computed(() => store.system ? ([['dashboard', 'Dashboard', store.system.dashboard], ['telegram', 'Telegram bot', store.system.telegram]] as const) : [])
+// the collector runs in the dashboard's stack, so its row installs through the dashboard update
+const images = computed(() => store.system ? ([['dashboard', 'Dashboard', store.system.dashboard], ['collector', 'Usage collector', store.system.collector], ['telegram', 'Telegram bot', store.system.telegram]] as const) : [])
+type Which = 'dashboard' | 'collector' | 'telegram'
+const updates = (which: Which) => (which === 'collector' ? 'dashboard' : which)
 const UPDATE_COPY = {
-  'system-dashboard': 'Pulls the newest dashboard image and recreates dockbench-dashboard from its Portainer stack (or restarts it when it already runs the newest). This page goes away for a moment and reloads by itself; /data stays.',
+  'system-dashboard': 'Pulls the newest dashboard and collector images and recreates the dashboard stack in Portainer (or restarts dockbench-dashboard when both already run the newest). This page goes away for a moment and reloads by itself; /data stays.',
   'system-telegram': 'Pulls the newest bot image and recreates dockbench-telegram. A Claude session running right now is stopped; the sessions stay and a reply continues them.',
 } as Record<string, string>
 const cf = computed(() => (store.confirm?.target.startsWith('system-') ? store.confirm : null))
-function imageNote(which: 'dashboard' | 'telegram', r: SystemImage) {
-  if (!r.deployed) return which === 'dashboard' ? 'Not running as container dockbench-dashboard, so it cannot update itself here (local dev?).' : 'Not deployed. Deploy it from the Telegram page.'
-  if (r.imageUpdate) return 'A newer image was pulled. Installing it recreates the container.'
+function imageNote(which: Which, r: SystemImage) {
+  if (!r.deployed) return { dashboard: 'Not running as container dockbench-dashboard, so it cannot update itself here (local dev?).', collector: 'Not deployed. Add the collector service of docker/compose.yml to the dashboard stack in Portainer.', telegram: 'Not deployed. Deploy it from the Telegram page.' }[which]
+  if (r.imageUpdate) return which === 'collector' ? 'A newer image was pulled. Installing updates it with the dashboard.' : 'A newer image was pulled. Installing it recreates the container.'
   if (r.checkError) return `The last pull failed: ${r.checkError}`
   if (r.imageUpdate === false) return `Newest image, checked ${ago(r.imageCheckedAt!, now.value)}.`
   if (r.image?.includes('@')) return 'Pinned by digest, so there is nothing to update to.'
   return 'Not checked yet.'
 }
-function holdLabel(which: 'dashboard' | 'telegram', r: SystemImage) {
-  if (store.sys.busy === which || (which === 'dashboard' && store.sys.restarting)) return which === 'dashboard' ? 'Restarting…' : 'Updating…'
+function holdLabel(which: Which, r: SystemImage) {
+  const w = updates(which)
+  if (store.sys.busy === w || (w === 'dashboard' && store.sys.restarting)) return w === 'dashboard' ? 'Restarting…' : 'Updating…'
   return r.imageUpdate ? 'Hold to install and restart' : 'Hold to pull and restart'
 }
-const holdOff = (r: SystemImage) => !r.deployed || !!store.sys.busy || store.sys.restarting || store.dockerDown
+const holdOff = (which: Which, r: SystemImage) => !r.deployed || (which === 'collector' && !store.system?.dashboard.deployed) || !!store.sys.busy || store.sys.restarting || store.dockerDown
 // after an error the call left without a status is the one that failed
 const codeCls = (n: number | null) => (n == null ? (store.sys.error ? 'code-bad' : 'code-wait') : n < 300 ? 'code-ok' : 'code-bad')
 const early = () => toast('Keep holding to confirm')
@@ -115,12 +119,12 @@ async function toggle(k: Guarded, e: Event) {
     <div class="set-cols">
     <div class="plate">
       <fieldset class="set"><legend id="updT">Updates</legend>
-        <p class="fine">The server pulls the dashboard and bot images through Portainer every 30 minutes; a newer one shows here, ready to install. Dev container images update from each container on Bench.</p>
+        <p class="fine">The server pulls the dashboard, collector and bot images through Portainer every 30 minutes; a newer one shows here, ready to install. Dev container images update from each container on Bench.</p>
         <p v-if="!store.system" class="fine">Loading…</p>
         <ul v-else class="pk-list">
           <li v-for="[which, label, r] in images" :key="which">
             <span><Led :sev="r.imageUpdate ? 'warn' : r.checkError ? 'bad' : r.deployed ? 'ok' : 'off'" /> {{ label }}<small class="num">{{ r.image ?? '·' }}</small><small :class="{ 's-warn': r.imageUpdate, 's-bad': !r.imageUpdate && r.checkError }">{{ imageNote(which, r) }}</small></span>
-            <HoldButton v-if="!cf" :data-hold="'update-' + which" :disabled="holdOff(r)" @confirm="systemUpdate(which)" @early="early">{{ holdLabel(which, r) }}</HoldButton>
+            <HoldButton v-if="!cf" :data-hold="'update-' + which" :disabled="holdOff(which, r)" @confirm="systemUpdate(updates(which))" @early="early">{{ holdLabel(which, r) }}</HoldButton>
           </li>
         </ul>
         <StepUpPanel v-if="cf" action="update" :name="cf.target.slice(7)" :text="UPDATE_COPY[cf.target]" :waiting="cf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />

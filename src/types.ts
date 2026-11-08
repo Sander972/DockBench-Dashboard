@@ -118,7 +118,7 @@ export interface TelegramClaim { code: string; link: string }
 // GET /api/system: the dashboard's own container and the bot's, for the Updates panel in Settings. imageUpdate as on DevContainer; checkError is why the last pull failed.
 export interface SystemImage { name: string; deployed: boolean; state: string | null; startedAt: string | null; image: string | null; imageUpdate: boolean | null; imageCheckedAt: string | null; checkError: string | null }
 // bootId changes when the dashboard server restarts; selfUpdateError is set when its restart or redeploy failed after answering
-export interface SystemStatus { bootId: string; dashboard: SystemImage; telegram: SystemImage; selfUpdateError: string | null }
+export interface SystemStatus { bootId: string; dashboard: SystemImage; telegram: SystemImage; collector: SystemImage; selfUpdateError: string | null }
 export interface SelfUpdateResult extends UpdateResult { restarting: true }
 
 // GET /api/actions: GitHub Actions per repo. status queued|in_progress|waiting|completed…, conclusion success|failure|cancelled|timed_out|skipped… once completed.
