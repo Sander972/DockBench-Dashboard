@@ -15,7 +15,7 @@ import ExecPanel from './ExecPanel.vue'
 import HoldButton from './HoldButton.vue'
 import Led from './Led.vue'
 import StepUpPanel from './StepUpPanel.vue'
-import TrendChart from './TrendChart.vue'
+import Sparkline from './Sparkline.vue'
 import { actionsUrl } from '../lib/actions'
 
 const props = defineProps<{ id: string }>()
@@ -80,6 +80,15 @@ const showClaude = computed(() => run.value && st.value?.claude_installed !== fa
 const switching = computed(() => store.claudeLogin[props.id]?.phase === 'starting')
 const sync = computed(() => st.value?.claude_plugin_sync)
 const showCode = computed(() => !!c.value?.deviceCode && (c.value.statusError === 'starting' || st.value?.tunnel === 'waiting_for_login'))
+
+// sparkline readout: the hovered sample, or the newest one
+const hover = ref<{ cpu: number | null; mem: number | null }>({ cpu: null, mem: null })
+function read(m: 'cpu' | 'mem') {
+  const a = hist.value[m], i = hover.value[m] ?? a.length - 1, x = a[i] ?? 0
+  // polls are not evenly spaced (action follow-ups, hidden tab), so the age comes from the sample's own time
+  const when = i < a.length - 1 ? ago(hist.value.t[i], now.value) : 'now'
+  return m === 'cpu' ? `${x.toFixed(1)}% · ${((x / 100) * ncpu.value).toFixed(1)} of ${ncpu.value} cores · ${when}` : `${gib(toGiB(x))} of ${gib(toGiB(c.value!.memLimit))} GiB · ${when}`
+}
 
 // git in three lines: what changed locally, then how it stands against the upstream
 const changes = computed(() => {
@@ -189,12 +198,24 @@ onUpdated(() => {
           <div class="sec-h"><h3 :id="'r-' + c.id" class="lbl">Resources</h3><span class="src-note">Docker stats · every {{ prefs.poll }}s</span></div>
           <div class="vitals">
             <template v-if="run">
-              <div class="vital"><span class="lbl c-cpu">CPU</span><span class="num big" :class="useCls(cpuPct(c))">{{ cpuPct(c).toFixed(1) }}%</span><span class="num v-sub">{{ ((cpuPct(c) / 100) * ncpu).toFixed(1) }}/{{ ncpu }} cores</span></div>
-              <div class="vital"><span class="lbl c-mem">RAM</span><span class="num big" :class="useCls(memPct(c))">{{ memPct(c).toFixed(0) }}%</span><span class="num v-sub">{{ gib(toGiB(c.memUsed)) }}/{{ gib(toGiB(c.memLimit)) }} GiB</span></div>
+              <div class="vital"><span class="lbl">CPU</span><span class="num big" :class="useCls(cpuPct(c))">{{ cpuPct(c).toFixed(1) }}%</span><span class="num v-sub">{{ ((cpuPct(c) / 100) * ncpu).toFixed(1) }}/{{ ncpu }} cores</span></div>
+              <div class="vital"><span class="lbl">RAM</span><span class="num big" :class="useCls(memPct(c))">{{ memPct(c).toFixed(0) }}%</span><span class="num v-sub">{{ gib(toGiB(c.memUsed)) }}/{{ gib(toGiB(c.memLimit)) }} GiB</span></div>
             </template>
             <div class="vital" :title="`Writable layer ${gib(toGiB(c.diskRw))} GiB, /home/dev volume ${gib(toGiB(c.diskVolume))} GiB, budget ${toGiB(DISK_BUDGET)} GiB`"><span class="lbl">Disk</span><span class="num big" :class="useCls(diskPct(c))">{{ diskPct(c).toFixed(0) }}%</span><span class="num v-sub">{{ gib(toGiB(diskBytes(c))) }}/{{ toGiB(DISK_BUDGET) }} GiB</span></div>
           </div>
-          <TrendChart v-if="run" :t="hist.t" :cpu="hist.cpu" :mem="hist.mem" />
+          <details v-if="run" class="fold" open>
+            <summary><span class="fold-t">CPU and RAM graphs</span><span class="fold-s">Last {{ hist.cpu.length }} samples</span></summary>
+            <div class="fold-b chs">
+              <div class="ch">
+                <div class="ch-top"><span class="lbl">CPU</span><span class="ch-foot num">{{ read('cpu') }}</span></div>
+                <Sparkline :samples="hist.cpu" :max="100" @hover="i => (hover.cpu = i)" />
+              </div>
+              <div class="ch">
+                <div class="ch-top"><span class="lbl">RAM</span><span class="ch-foot num">{{ read('mem') }}</span></div>
+                <Sparkline :samples="hist.mem" :max="c.memLimit" @hover="i => (hover.mem = i)" />
+              </div>
+            </div>
+          </details>
           <p v-else class="fine">Docker reports no CPU or memory for a {{ c.state === 'exited' ? 'stopped' : c.state }} container.</p>
         </section>
 
