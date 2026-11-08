@@ -7,6 +7,7 @@ import { afterPaint } from './lib/paint'
 // Bench and sign-in come in the first bundle; the other pages load on their own and are fetched once the first page has painted and the browser is idle, so a tab switch never waits
 const views = {
   actions: () => import('./views/ActionsView.vue'),
+  usage: () => import('./views/UsageView.vue'),
   deploy: () => import('./views/DeployView.vue'),
   activity: () => import('./views/ActivityView.vue'),
   telegram: () => import('./views/TelegramView.vue'),
@@ -23,6 +24,7 @@ export const router = createRouter({
     { path: '/sign-in', name: 'sign-in', component: SignInView, meta: { title: 'Sign in' } },
     // one record for list and detail, so the same BenchView instance stays mounted and the list keeps its scroll
     { path: '/bench/:id?', name: 'bench', component: BenchView, meta: { title: 'Bench' } },
+    { path: '/usage', name: 'usage', component: views.usage, meta: { title: 'Usage' } },
     { path: '/actions', name: 'actions', component: views.actions, meta: { title: 'Actions' } },
     { path: '/deploy', name: 'deploy', component: views.deploy, meta: { title: 'Deploy' } },
     { path: '/activity', name: 'activity', component: views.activity, meta: { title: 'Activity' } },

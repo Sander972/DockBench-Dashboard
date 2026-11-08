@@ -13,6 +13,7 @@ const route = useRoute(), router = useRouter()
 
 const VIEWS = [
   { to: 'bench', label: 'Bench', icon: 'bench' },
+  { to: 'usage', label: 'Usage', icon: 'usage' },
   { to: 'actions', label: 'Actions', icon: 'ci' },
   { to: 'deploy', label: 'Deploy', icon: 'plus' },
   { to: 'activity', label: 'Activity', icon: 'activity' },
