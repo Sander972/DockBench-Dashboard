@@ -47,6 +47,7 @@ export const store = reactive({
   dockerDown: false,
   downError: '', // the failing call, for the error well
   history: {} as Record<string, { t: number[]; cpu: number[]; mem: number[] }>, // up to 60 samples: ms time, cpu % and mem bytes
+  hostHistory: { t: [] as number[], cpu: [] as number[], mem: [] as number[] }, // same, for the host: one sample per good host answer
   logs: {} as Record<string, string[] | undefined>,
   execs: {} as Record<string, ExecState | undefined>,
   pending: {} as Record<string, Pending | undefined>,
@@ -207,6 +208,7 @@ function expire() {
   store.host = null
   store.loading = true
   store.history = {}
+  store.hostHistory = { t: [], cpu: [], mem: [] }
   store.logs = {}
   store.execs = {}
   store.pending = {}
@@ -271,7 +273,13 @@ function setHost(host: HostUsage) {
   store.downError = host.reachable ? '' : 'GET /api/host · reachable: false, the Docker socket did not answer'
   store.lastPollAt = Date.now()
   // an unreachable answer from the server carries zeros, so the last good values stay
-  if (host.reachable) { store.host = host; store.lastGoodAt = Date.parse(host.polledAt) }
+  if (host.reachable) {
+    store.host = host
+    store.lastGoodAt = Date.parse(host.polledAt)
+    const h = store.hostHistory
+    h.t.push(Date.now()); h.cpu.push(host.cpuPct); h.mem.push(host.memUsed)
+    if (h.t.length > 60) { h.t.shift(); h.cpu.shift(); h.mem.shift() }
+  }
   return host
 }
 

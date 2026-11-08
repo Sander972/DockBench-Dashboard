@@ -188,6 +188,21 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 .chans{display:grid;gap:8px}
 .chan{display:grid;grid-template-columns:2.6rem minmax(0,1fr) 6.4rem;align-items:center;gap:12px}
 .chan .v{font-size:.75rem;text-align:right;white-space:nowrap}
+/* host CPU and RAM graphs: white sparklines side by side in an open fold */
+.host-graphs{border-top:1px solid var(--line-2)}
+.host-graphs summary{min-height:36px;padding-block:6px}
+.host-graphs .fold-t{font-size:.8125rem}
+.fold .chs{grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:12px 24px}
+.ch{display:grid;gap:8px;min-width:0}
+.ch-top{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.ch-foot{font-size:.6875rem;color:var(--fg-2)}
+.spark{display:block;width:100%;height:auto;touch-action:pan-y;cursor:crosshair}
+.spark .grid{stroke:var(--line);stroke-width:1;stroke-dasharray:2 3}
+.spark .base{stroke:var(--line);stroke-width:1}
+.spark .area{fill:var(--seg-on);opacity:.08}
+.spark .ln{fill:none;stroke:var(--seg-on);stroke-width:1.75;stroke-linejoin:round;stroke-linecap:round}
+.spark .end{fill:var(--seg-on);stroke:var(--plate);stroke-width:2}
+.spark .xh{stroke:var(--fg-3);stroke-width:1}
 .census{display:flex;flex-wrap:wrap;gap:4px 14px;padding-top:10px;border-top:1px solid var(--line-2);font-size:.8125rem;color:var(--fg-2)}
 .census > span{display:flex;flex-wrap:wrap;gap:4px 14px}
 .census b{color:var(--fg);font-family:var(--f-num);font-weight:500;font-size:.75rem}
