@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { deviceCode, imageChecker, lastError, shared, statusTracker, updateAvailable, type DevContainerStatus } from './containers'
+import { deviceCode, imageChecker, inspectCache, lastError, shared, statusTracker, ttlCache, updateAvailable, type DevContainerStatus } from './containers'
 
 const st = { tunnel: 'connected', mise: {} } as unknown as DevContainerStatus
 
@@ -82,4 +82,37 @@ test('shared never waits, serves the last good value while it reloads and keeps 
   expect(get()).toBe(1) // reload 3 starts, old value served meanwhile
   await Bun.sleep(1)
   expect(get()).toBe(3)
+})
+
+test('inspect is reused while the state holds and the answer is young, asked again on a state change, a forget or a failure', async () => {
+  let calls = 0
+  let fail = false
+  const c = inspectCache(async (id) => { calls++; if (fail) throw new Error('down'); return `${id}#${calls}` }, 30)
+  expect(await c.get('a', 'running')).toBe('a#1')
+  expect(await c.get('a', 'running')).toBe('a#1')
+  expect(await c.get('a', 'exited')).toBe('a#2')
+  c.forget('a')
+  expect(await c.get('a', 'exited')).toBe('a#3')
+  await Bun.sleep(40)
+  expect(await c.get('a', 'exited')).toBe('a#4')
+  fail = true
+  c.forget('a')
+  await expect(c.get('a', 'exited')).rejects.toThrow('down')
+  fail = false
+  expect(await c.get('a', 'exited')).toBe('a#6')
+  c.keep(['b'])
+  expect(await c.get('a', 'exited')).toBe('a#7')
+})
+
+test('ttlCache shares one answer for the ttl and keeps no failure', async () => {
+  let calls = 0
+  let fail = false
+  const get = ttlCache(30, async () => { calls++; if (fail) throw new Error('down'); return calls })
+  expect(await Promise.all([get(), get()])).toEqual([1, 1])
+  expect(await get()).toBe(1)
+  await Bun.sleep(40)
+  fail = true
+  await expect(get()).rejects.toThrow('down')
+  fail = false
+  expect(await get()).toBe(3)
 })

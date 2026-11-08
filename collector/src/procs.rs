@@ -1,7 +1,8 @@
-//! The process walk: every numeric `/proc/<pid>` (no threads), its container from the cgroup path, then per-name sums.
+//! The process walk: every numeric `/proc/<pid>` (no threads), its container from the cgroup path, then per-name sums. One file read per process and tick (`stat`); `cgroup` is read once per process lifetime.
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -25,8 +26,20 @@ pub struct ProcAgg {
     pub container: Option<String>,
 }
 
-/// `(comm, utime + stime)` from `/proc/<pid>/stat`; the comm may hold spaces and parentheses, so it ends at the last `)`.
-pub fn parse_pid_stat(s: &str) -> Option<(String, u64)> {
+/// What one `/proc/<pid>/stat` read gives.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PidStat {
+    pub comm: String,
+    /// utime + stime
+    pub jiffies: u64,
+    /// field 22, in jiffies since boot: with the pid it names one process, since pids are reused
+    pub start: u64,
+    /// field 24, resident pages: the same count `statm` gives, so that file is not read too
+    pub rss_pages: u64,
+}
+
+/// `/proc/<pid>/stat`; the comm may hold spaces and parentheses, so it ends at the last `)`. `rss_pages` is 0 when the line is cut before field 24.
+pub fn parse_pid_stat(s: &str) -> Option<PidStat> {
     let open = s.find('(')?;
     let close = s.rfind(')')?;
     if close < open {
@@ -36,12 +49,9 @@ pub fn parse_pid_stat(s: &str) -> Option<(String, u64)> {
     let f: Vec<&str> = s[close + 1..].split_whitespace().collect();
     let utime: u64 = f.get(11)?.parse().ok()?;
     let stime: u64 = f.get(12)?.parse().ok()?;
-    Some((comm, utime + stime))
-}
-
-/// Resident set size in bytes from `/proc/<pid>/statm` (second field, in pages); 0 when unreadable.
-pub fn parse_statm_rss(s: &str, page: u64) -> u64 {
-    s.split_whitespace().nth(1).and_then(|x| x.parse::<u64>().ok()).unwrap_or(0) * page
+    let start = f.get(19).and_then(|x| x.parse().ok()).unwrap_or(0);
+    let rss_pages = f.get(21).and_then(|x| x.parse().ok()).unwrap_or(0);
+    Some(PidStat { comm, jiffies: utime + stime, start, rss_pages })
 }
 
 pub(crate) fn is_docker_id(s: &str) -> bool {
@@ -70,26 +80,50 @@ pub fn page_size() -> u64 {
     })
 }
 
-fn read_pid(dir: &Path, pid: u32, page: u64) -> Option<ProcRaw> {
-    let (comm, jiffies) = parse_pid_stat(&fs::read_to_string(dir.join("stat")).ok()?)?;
-    let rss = parse_statm_rss(&fs::read_to_string(dir.join("statm")).ok()?, page);
-    if rss == 0 {
-        return None; // kernel thread
-    }
-    let container = parse_cgroup(&fs::read_to_string(dir.join("cgroup")).ok()?);
-    Some(ProcRaw { pid, comm, jiffies, rss, container })
+/// The walk with its memory: each process's container, by pid and start time. A process does not change container, so its `cgroup` file is read once, on the first tick that sees it.
+#[derive(Default)]
+pub struct Walker {
+    containers: HashMap<u32, (u64, Option<String>)>,
+    buf: String,
 }
 
-/// Every process under `proc_root`; a pid whose files vanish mid-read and kernel threads are skipped.
+impl Walker {
+    /// Every process under `proc_root`; a pid whose files vanish mid-read and kernel threads (no resident pages) are skipped. Forgets the processes that are gone.
+    pub fn walk(&mut self, proc_root: &Path) -> Vec<ProcRaw> {
+        let page = page_size();
+        let Ok(rd) = fs::read_dir(proc_root) else { return Vec::new() };
+        let mut out = Vec::new();
+        let mut seen = HashMap::with_capacity(self.containers.len());
+        for e in rd.flatten() {
+            let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
+            let dir = e.path();
+            self.buf.clear();
+            let Ok(mut f) = fs::File::open(dir.join("stat")) else { continue };
+            if f.read_to_string(&mut self.buf).is_err() {
+                continue;
+            }
+            let Some(st) = parse_pid_stat(&self.buf) else { continue };
+            if st.rss_pages == 0 {
+                continue; // kernel thread
+            }
+            let container = match self.containers.get(&pid) {
+                Some((start, c)) if *start == st.start => c.clone(),
+                _ => match fs::read_to_string(dir.join("cgroup")) {
+                    Ok(cg) => parse_cgroup(&cg),
+                    Err(_) => continue,
+                },
+            };
+            seen.insert(pid, (st.start, container.clone()));
+            out.push(ProcRaw { pid, comm: st.comm, jiffies: st.jiffies, rss: st.rss_pages * page, container });
+        }
+        self.containers = seen;
+        out
+    }
+}
+
+/// One walk without memory, for one-off reads.
 pub fn walk(proc_root: &Path) -> Vec<ProcRaw> {
-    let page = page_size();
-    let Ok(rd) = fs::read_dir(proc_root) else { return Vec::new() };
-    rd.flatten()
-        .filter_map(|e| {
-            let pid: u32 = e.file_name().to_str()?.parse().ok()?;
-            read_pid(&e.path(), pid, page)
-        })
-        .collect()
+    Walker::default().walk(proc_root)
 }
 
 /// Sums `cur` per `(container, comm)`; CPU is the jiffies delta against `prev` as a share of the host's delta (0-100). A pid absent from `prev`, reused under another name or container, or whose counter went back contributes 0. Keeps entries with CPU above 0 or more than 1 MiB resident.
@@ -127,14 +161,9 @@ mod tests {
 
     #[test]
     fn pid_stat_splits_at_the_last_paren() {
-        assert_eq!(parse_pid_stat("123 (Web Content) S 1 1 1 0 -1 4194560 0 0 0 0 7 3 0 0 20 0 1 0 100 0 0\n"), Some(("Web Content".into(), 10)));
-        assert_eq!(parse_pid_stat("1 (a) b) R 0 0 0 0 0 0 0 0 0 0 1 2 0 0\n"), Some(("a) b".into(), 3)));
-    }
-
-    #[test]
-    fn statm_rss_is_resident_pages_times_page_size() {
-        assert_eq!(parse_statm_rss("5000 300 100 1 0 200 0\n", 4096), 300 * 4096);
-        assert_eq!(parse_statm_rss("garbage\n", 4096), 0);
+        assert_eq!(parse_pid_stat("123 (Web Content) S 1 1 1 0 -1 4194560 0 0 0 0 7 3 0 0 20 0 1 0 100 5000 300 0\n"), Some(PidStat { comm: "Web Content".into(), jiffies: 10, start: 100, rss_pages: 300 }));
+        assert_eq!(parse_pid_stat("1 (a) b) R 0 0 0 0 0 0 0 0 0 0 1 2 0 0\n"), Some(PidStat { comm: "a) b".into(), jiffies: 3, start: 0, rss_pages: 0 }));
+        assert_eq!(parse_pid_stat("garbage\n"), None);
     }
 
     #[test]
@@ -153,16 +182,39 @@ mod tests {
         for pid in ["7", "4242"] {
             let p = dir.join(pid);
             fs::create_dir_all(&p).unwrap();
-            fs::write(p.join("stat"), format!("{pid} (node) S 1 1 1 0 -1 0 0 0 0 0 5 5 0 0 20 0 1 0 100 0 0\n")).unwrap();
+            fs::write(p.join("stat"), format!("{pid} (node) S 1 1 1 0 -1 0 0 0 0 0 5 5 0 0 20 0 1 0 100 1000 10\n")).unwrap();
             fs::write(p.join("cgroup"), format!("0::/system.slice/docker-{id}.scope\n")).unwrap();
-            fs::write(p.join("statm"), "100 10 0 0 0 0 0\n").unwrap();
         }
         fs::create_dir_all(dir.join("self")).unwrap();
-        fs::remove_file(dir.join("4242/statm")).unwrap();
+        fs::remove_file(dir.join("4242/cgroup")).unwrap();
         let procs = walk(&dir);
         assert!(procs.iter().all(|p| p.pid != 4242));
         let p = procs.iter().find(|p| p.pid == 7).expect("complete pid listed");
-        assert_eq!((p.comm.as_str(), p.jiffies, p.container.as_deref()), ("node", 10, Some(id.as_str())));
+        assert_eq!((p.comm.as_str(), p.jiffies, p.rss, p.container.as_deref()), ("node", 10, 10 * page_size(), Some(id.as_str())));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn walker_reads_cgroup_once_per_process() {
+        let dir = tempdir("walker");
+        let (a, b) = ("a".repeat(64), "b".repeat(64));
+        let p = dir.join("7");
+        fs::create_dir_all(&p).unwrap();
+        let stat = |start: u32| format!("7 (node) S 1 1 1 0 -1 0 0 0 0 0 5 5 0 0 20 0 1 0 {start} 1000 10\n");
+        fs::write(p.join("stat"), stat(100)).unwrap();
+        fs::write(p.join("cgroup"), format!("0::/system.slice/docker-{a}.scope\n")).unwrap();
+        let mut w = Walker::default();
+        assert_eq!(w.walk(&dir)[0].container.as_deref(), Some(a.as_str()));
+        // same process: the remembered container, even with the file gone
+        fs::remove_file(p.join("cgroup")).unwrap();
+        assert_eq!(w.walk(&dir)[0].container.as_deref(), Some(a.as_str()));
+        // the pid reused by a new process (other start time): read again
+        fs::write(p.join("stat"), stat(200)).unwrap();
+        fs::write(p.join("cgroup"), format!("0::/docker/{b}\n")).unwrap();
+        assert_eq!(w.walk(&dir)[0].container.as_deref(), Some(b.as_str()));
+        // gone: forgotten
+        fs::remove_dir_all(&p).unwrap();
+        assert!(w.walk(&dir).is_empty() && w.containers.is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -173,7 +225,6 @@ mod tests {
         fs::create_dir_all(&p).unwrap();
         fs::write(p.join("stat"), "2 (kthreadd) S 0 0 0 0 -1 0 0 0 0 0 1 1 0 0 20 0 1 0 1 0 0\n").unwrap();
         fs::write(p.join("cgroup"), "0::/\n").unwrap();
-        fs::write(p.join("statm"), "0 0 0 0 0 0 0\n").unwrap();
         assert!(walk(&dir).is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
