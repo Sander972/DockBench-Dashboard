@@ -22,4 +22,6 @@ export const env = {
   portainerUrl: req('PORTAINER_URL').replace(/\/$/, ''),
   portainerApiKey: req('PORTAINER_API_KEY'),
   portainerEndpointId: Number(req('PORTAINER_ENDPOINT_ID')),
+  // empty means no collector: usage figures read 0 and host.collector is false
+  collectorUrl: (process.env.COLLECTOR_URL ?? 'http://dockbench-collector:9100').replace(/\/$/, ''),
 }

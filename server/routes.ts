@@ -8,8 +8,9 @@ import { authorizeUrl, createDeployKey, deleteDeployKey, exchangeCode, findDeplo
 import { appendEvent, LIMIT_RANGES, readAccount, readEvents, readSettings, writeAccount, writeSettings, type Account, type ActivityEvent, type ApiCall, type Settings } from './store'
 import { createSessionRecord, enforceLimit, findAlive, listSessions, parseCookie, revoke, revokeAll, signCookie, touch, type SessionLimits } from './sessions'
 import { createLive } from './live'
-import { containerByName, containerLogs, containerPost, containerStats, dockerInfo, execRun, imageInspect, inspectContainer, listDockbench, removeContainer, removeVolume, stackVolumes, systemDf } from './docker'
-import { diskUsage, hostCpuPct, hostMemUsed } from './host'
+import { containerByName, containerLogs, containerPost, dockerInfo, execRun, imageInspect, inspectContainer, listDockbench, removeContainer, removeVolume, stackVolumes, systemDf } from './docker'
+import { diskUsage } from './host'
+import { createCollector, history as collectorHistory, WINDOWS, type Window } from './collector'
 import { createStack, deleteStack, findStack, fromStackFile, patchEnv, pullImage, putStack, readStack, redeployStack, STACK_FILE, stackEnv, TELEGRAM_STACK_FILE, vscodeEnv } from './portainer'
 import { deploy, DeployFailure, REPO_RE, validateDeploy } from './deploy'
 import { deleteKeys, keyTitle, removeStack, stackKeys } from './remove'
@@ -136,8 +137,8 @@ async function dockbench(id: string) {
 
 // /system/df walks every container layer and volume, so it is far too slow to run on each poll, and the daemon refuses a second one while one runs. ponytail: disk sizes lag up to 60 s plus two df runs, read 0 until the first df answers, and keep the last good sizes while df fails.
 const diskSizes = shared(60_000, () => systemDf(env.dockerHost), { rw: new Map<string, number>(), volumes: new Map<string, number>() })
-// last good stats per running container id since it last started, sent when a /stats call fails so the client does not store a fake 0% / 0 B sample with a 0 limit
-const lastStats = new Map<string, { startedAt: string; s: Awaited<ReturnType<typeof containerStats>> }>()
+// host, container and process usage from the collector container; one /metrics answer per live interval serves both views of a tick
+const collector = createCollector(env.collectorUrl, 2000)
 const statusView = statusTracker((name) => fetchStatus(`http://${name}:8080/status`))
 const botStatusUrl = `http://${TELEGRAM_NAME}:8080/status`
 // ghcr.io refuses the GitHub OAuth token, so a digest lookup cannot authenticate; pulling through Portainer uses the PAT stored under its Registries, then the tag's local image id is the answer. ponytail: the 30-minute refresh downloads a new image in the background, a registry-side digest lookup if disk or bandwidth matter.
@@ -287,38 +288,29 @@ async function deployedRepos(): Promise<Map<string, string>> {
   return map
 }
 
-// HostUsage in src/types.ts. reachable false when the socket does not answer; usage numbers are 0 where /proc or statfs is missing (dev on Windows)
+// HostUsage in src/types.ts. reachable false when the socket does not answer; usage figures come from the collector and read 0 with collector false when it does not answer; disk is 0 where statfs is missing (dev on Windows)
 async function hostView() {
   const polledAt = new Date().toISOString()
-  try {
-    const [i, cpuPct, memUsed, disk] = await Promise.all([
-      dockerInfo(env.dockerHost),
-      hostCpuPct().catch(() => 0),
-      hostMemUsed().catch(() => 0),
-      diskUsage(env.dataDir).catch(() => ({ diskTotal: 0, diskUsed: 0 })),
-    ])
-    return { ...i, ...disk, cpuPct, memUsed, polledAt, reachable: true }
-  } catch {
-    return { name: '', ncpu: 0, memTotal: 0, diskTotal: 0, dockerVersion: '', cpuPct: 0, memUsed: 0, diskUsed: 0, polledAt, reachable: false }
-  }
+  const [snap, docker] = await Promise.all([
+    collector.latest(),
+    Promise.all([dockerInfo(env.dockerHost), diskUsage(env.dataDir).catch(() => ({ diskTotal: 0, diskUsed: 0 }))]).catch(() => null),
+  ])
+  const h = snap?.host
+  const usage = { cpuPct: h?.cpuPct ?? 0, memUsed: h?.memUsed ?? 0, stealPct: h?.stealPct ?? 0, load1: h?.load1 ?? 0, psiCpuSome10: h?.psiCpuSome10 ?? 0, collector: !!snap }
+  if (!docker) return { name: '', ncpu: 0, memTotal: 0, diskTotal: 0, dockerVersion: '', diskUsed: 0, ...usage, polledAt, reachable: false }
+  return { ...docker[0], ...docker[1], ...usage, polledAt, reachable: true }
 }
 
-// DevContainer in src/types.ts. Stats (about 1 s) and /status (waited on for up to 2 s) run side by side per container; disk sizes and registry digests come from caches and never hold a poll up.
+// DevContainer in src/types.ts. /status is waited on for up to 2 s per container; usage comes from the collector by id (0 for a container it has not sampled yet or when it does not answer), disk sizes and registry digests from caches, so none of them holds a poll up.
 async function containersView() {
-  const rows = await listDockbench(env.dockerHost)
-  const none = { cpuPct: 0, memUsed: 0, memLimit: 0 }
+  const [rows, snap] = await Promise.all([listDockbench(env.dockerHost), collector.latest()])
   const df = diskSizes()
   const fetched = await lastFetches()
-  for (const id of lastStats.keys()) if (!rows.some((r) => r.id === id && r.state === 'running')) lastStats.delete(id)
   return Promise.all(rows.map(async (r) => {
     const x = await inspectContainer(env.dockerHost, r.id)
     const running = r.state === 'running'
-    const stats = () => containerStats(env.dockerHost, r.id).then((s) => (lastStats.set(r.id, { startedAt: x.startedAt, s }), s), () => {
-      // a restart between two polls keeps the id and the running state, so only stats from the current start count
-      const l = lastStats.get(r.id)
-      return l?.startedAt === x.startedAt ? l.s : none
-    })
-    const [s, sv] = await Promise.all([running ? stats() : none, statusView(r.id, r.name, x.startedAt, running)])
+    const s = running ? snap?.containers.find((c) => c.id === r.id) : undefined
+    const sv = await statusView(r.id, r.name, x.startedAt, running)
     // the log is read only while it says something /status cannot: a device code before the first answer or while the tunnel waits for approval, the fatal line of a restart loop
     const needLog = r.state === 'restarting' || (running && (sv.statusError === 'starting' || sv.status?.tunnel === 'waiting_for_login'))
     const log = needLog ? await containerLogs(env.dockerHost, r.id, 100).catch(() => []) : []
@@ -326,8 +318,8 @@ async function containersView() {
     return {
       id: r.id, name: r.name, repo: x.repoUrl, state: r.state,
       startedAt: x.startedAt, finishedAt: x.finishedAt, exitCode: x.exitCode, restartCount: x.restartCount,
-      // no memory limit in the stack, so HostConfig.Memory is 0; the stats limit is then the host's RAM, which keeps the RAM meter meaningful
-      cpuPct: s.cpuPct, memUsed: s.memUsed, memLimit: x.memLimit || s.memLimit,
+      // no memory limit in the stack, so HostConfig.Memory is 0; the collector's limit is then the host's RAM, which keeps the RAM meter meaningful
+      cpuPct: s?.cpuPct ?? 0, memUsed: s?.memUsed ?? 0, memLimit: x.memLimit || s?.memLimit || 0,
       diskRw: df.rw.get(r.id) ?? 0, diskVolume: x.homeVolume ? df.volumes.get(x.homeVolume) ?? 0 : 0,
       ...sv,
       lastFetchAt: fetched.get(r.name) ?? null,
@@ -608,6 +600,17 @@ export const routes = {
 
   '/api/host': auth(async () => json(await hostView())),
   '/api/containers': auth(async () => json(await containersView())),
+  // Utilization in src/types.ts: the collector's history over a window plus its latest snapshot, with every container id resolved to a name and the dockbench flag
+  '/api/utilization': auth(async (req) => {
+    const w = new URL(req.url).searchParams.get('window') ?? '1h'
+    if (!Object.hasOwn(WINDOWS, w)) throw new HttpError(400, 'window must be 1h, 6h or 24h')
+    const [h, snap] = await Promise.all([env.collectorUrl ? collectorHistory(env.collectorUrl, w as Window).catch(() => null) : null, collector.latest()])
+    if (!h || !snap) return json({ error: 'collector unreachable' }, 503)
+    const names: Record<string, { name: string; dockbench: boolean }> = {}
+    for (const p of h.points) for (const [id, c] of Object.entries(p.containers)) names[id] = { name: c.name, dockbench: false }
+    for (const c of snap.containers) names[c.id] = { name: c.name, dockbench: c.dockbench }
+    return json({ window: w, stepMs: h.stepMs, at: snap.at, points: h.points, containers: snap.containers, processes: snap.processes, names })
+  }),
   // Server-Sent Events: `snapshot` {host, containers} every 2 s, `down` {error} while Docker does not answer, `signed-out` {} then close when the session is gone. Cached nowhere (no-store, X-Accel-Buffering: no for nginx).
   '/api/live': auth(async (req: BunRequest<'/api/live'>, server) => { server.timeout(req, 0); return live.handle(sessionId(req)!) }),
 

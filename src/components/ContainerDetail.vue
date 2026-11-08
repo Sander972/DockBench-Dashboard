@@ -341,7 +341,7 @@ onUpdated(() => {
             <ul>
               <li><code>GET /containers/json?all=true&amp;filters={"label":["dockbench=true"]}</code><br>state, every {{ prefs.poll }}s</li>
               <li><code>GET /containers/{{ sh }}/json</code><br>started at, restart count, image</li>
-              <li><code>GET /containers/{{ sh }}/stats?stream=false</code><br>CPU and memory, about 1s per call, run in parallel</li>
+              <li><code>GET http://dockbench-collector:9100/metrics</code><br>CPU and memory from the collector's cgroup sample, one call per tick for every container</li>
               <li><code>GET /system/df</code><br>writable layer and /home/dev volume size, at most once a minute</li>
               <li><code>GET http://{{ c.name }}:8080/status</code><br>git, tunnel, tools. Inside devnet only. One request at a time; a poll waits up to 2s for it, then shows the last answer.</li>
               <li><code>GET /containers/{{ sh }}/logs?stdout=true&amp;stderr=true&amp;tail=100</code><br>log, on open and on Refresh; device codes and the fatal line while starting or in a restart loop</li>

@@ -156,32 +156,6 @@ export async function imageInspect(host: string, image: string): Promise<{ id: s
   return { id: i.Id, digests: i.RepoDigests ?? [] }
 }
 
-export interface Stats {
-  cpu_stats: { cpu_usage: { total_usage: number }; system_cpu_usage?: number }
-  precpu_stats: { cpu_usage: { total_usage: number }; system_cpu_usage?: number }
-  memory_stats: { usage?: number; limit?: number; stats?: Record<string, number> }
-}
-
-// share of the whole host (0-100, not docker stats' per-core 400%), matching HostUsage.cpuPct and the "x of n cores" readout. Memory as docker stats shows it: usage minus page cache (inactive_file on cgroup v2, total_inactive_file on v1).
-export function parseStats(s: Stats): { cpuPct: number; memUsed: number; memLimit: number } {
-  const cpu = s.cpu_stats.cpu_usage.total_usage - s.precpu_stats.cpu_usage.total_usage
-  // without a previous system time the difference would be the host's whole uptime
-  const pre = s.precpu_stats.system_cpu_usage
-  const sys = pre ? (s.cpu_stats.system_cpu_usage ?? 0) - pre : 0
-  const m = s.memory_stats
-  // as docker stats: cgroup v1's hierarchical total_inactive_file first, then inactive_file, each only when below usage, else the raw usage
-  const usage = m.usage ?? 0
-  const cache = [m.stats?.total_inactive_file, m.stats?.inactive_file].find((c) => c !== undefined && c < usage) ?? 0
-  return { cpuPct: sys > 0 && cpu > 0 ? (cpu / sys) * 100 : 0, memUsed: usage - cache, memLimit: m.limit ?? 0 }
-}
-
-// stream=false makes the daemon wait for a second sample (about 1 s) so precpu_stats is filled
-export async function containerStats(host: string, id: string): Promise<ReturnType<typeof parseStats>> {
-  const res = await dockerFetch(host, `/containers/${id}/stats?stream=false`)
-  if (!res.ok) throw new Error(`Docker stats returned ${res.status}`)
-  return parseStats((await res.json()) as Stats)
-}
-
 export interface DiskSizes {
   rw: Map<string, number>
   volumes: Map<string, number>

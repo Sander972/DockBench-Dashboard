@@ -14,6 +14,9 @@ const docker = Bun.serve({ port: 0, fetch: async (req) => (dockerFake ? dockerFa
 // Portainer that fails everything unless a test swaps in its own fake
 let portainerFake: ((req: Request) => Response | Promise<Response>) | null = null
 const portainer = Bun.serve({ port: 0, fetch: (req) => (portainerFake ? portainerFake(req) : new Response('down', { status: 500 })) })
+// collector that has no sample yet (503) unless a test swaps in its own fake
+let collectorFake: ((req: Request) => Response | Promise<Response>) | null = null
+const collectorServer = Bun.serve({ port: 0, fetch: (req) => (collectorFake ? collectorFake(req) : new Response('no sample yet', { status: 503 })) })
 Object.assign(process.env, {
   PUBLIC_URL: 'http://localhost:5173',
   GITHUB_CLIENT_ID: 'cid',
@@ -27,6 +30,7 @@ Object.assign(process.env, {
   DATA_DIR: dir,
   STATIC_DIR: staticDir,
   DOCKER_HOST: `http://localhost:${docker.port}`,
+  COLLECTOR_URL: `http://localhost:${collectorServer.port}`,
 })
 
 const { routes } = await import('./routes')
@@ -143,6 +147,73 @@ test('host answers reachable false when the socket does not answer', async () =>
   const res = await fetch(`${base}/api/host`, { headers: { cookie: session } })
   expect(res.status).toBe(200)
   expect(((await res.json()) as { reachable: boolean }).reachable).toBe(false)
+})
+
+const collectorSnap = {
+  at: 1000, intervalMs: 2000,
+  host: { ncpu: 4, cpuPct: 42, stealPct: 2, iowaitPct: 0, memTotal: 8e9, memUsed: 4e9, load1: 3, load5: 2, load15: 1, psiCpuSome10: 5 },
+  containers: [{ id: 'c1', name: 'dockbench-shop', image: 'x', dockbench: true, cpuPct: 7, memUsed: 500, memLimit: 8e9 }],
+  processes: [{ comm: 'node', pids: [10], container: 'c1', cpuPct: 5, rss: 400 }],
+}
+const collectorWith = (points: unknown[] = []) => (req: Request) => (new URL(req.url).pathname === '/metrics' ? Response.json(collectorSnap) : Response.json({ stepMs: 10_000, points }))
+// the server shares one /metrics answer per live interval (2 s), so a test that swaps the fake waits it out
+const collectorTtl = () => Bun.sleep(2100)
+
+test("host carries the collector's cpu and collector true", async () => {
+  collectorFake = collectorWith()
+  await collectorTtl()
+  const res = await fetch(`${base}/api/host`, { headers: { cookie: session } })
+  expect(res.status).toBe(200)
+  expect(await res.json()).toMatchObject({ cpuPct: 42, memUsed: 4e9, stealPct: 2, load1: 3, psiCpuSome10: 5, collector: true })
+})
+
+test('host carries zeros and collector false when the collector is down', async () => {
+  collectorFake = null
+  await collectorTtl()
+  const res = await fetch(`${base}/api/host`, { headers: { cookie: session } })
+  expect(res.status).toBe(200)
+  expect(await res.json()).toMatchObject({ cpuPct: 0, memUsed: 0, stealPct: 0, load1: 0, psiCpuSome10: 0, collector: false })
+})
+
+test('containers take cpu and mem from the collector by id', async () => {
+  dockerFake = (req) => {
+    const u = new URL(req.url)
+    if (u.pathname === '/containers/json') return Response.json([{ Id: 'c1', Names: ['/dockbench-shop'], State: 'running', Image: 'x' }, { Id: 'c2', Names: ['/dockbench-new'], State: 'running', Image: 'x' }])
+    if (u.pathname === '/containers/c1/json' || u.pathname === '/containers/c2/json') return Response.json({ Image: 'sha256:a', State: { Status: 'running', StartedAt: '2026-11-08T10:00:00Z', FinishedAt: '0001-01-01T00:00:00Z', ExitCode: 0 }, RestartCount: 0, HostConfig: { Memory: 0 }, Config: { Env: [], Image: 'x', Labels: {} }, Mounts: [] })
+    return new Response('down', { status: 500 })
+  }
+  collectorFake = collectorWith()
+  await collectorTtl()
+  try {
+    const rows = (await (await fetch(`${base}/api/containers`, { headers: { cookie: session } })).json()) as { id: string; cpuPct: number; memUsed: number; memLimit: number }[]
+    expect(rows.map((r) => [r.id, r.cpuPct, r.memUsed, r.memLimit])).toEqual([['c1', 7, 500, 8e9], ['c2', 0, 0, 0]])
+  } finally {
+    dockerFake = null
+  }
+})
+
+test('utilization 400 on a bad window and 503 when the collector is down', async () => {
+  expect((await fetch(`${base}/api/utilization?window=1h`)).status).toBe(401)
+  for (const w of ['2h', 'toString', '']) expect((await fetch(`${base}/api/utilization?window=${w}`, { headers: { cookie: session } })).status).toBe(400)
+  collectorFake = null
+  const res = await fetch(`${base}/api/utilization?window=1h`, { headers: { cookie: session } })
+  expect(res.status).toBe(503)
+  expect(await res.json()).toEqual({ error: 'collector unreachable' })
+})
+
+test('utilization resolves names', async () => {
+  const point = { t: 900, host: { cpuPct: 1, stealPct: 0, memUsed: 1, load1: 1 }, containers: { c1: { name: 'dockbench-shop', cpuPct: 1, memUsed: 2 }, old: { name: 'gone', cpuPct: 0, memUsed: 0 } }, top: {} }
+  collectorFake = collectorWith([point])
+  await collectorTtl()
+  try {
+    const res = await fetch(`${base}/api/utilization?window=6h`, { headers: { cookie: session } })
+    expect(res.status).toBe(200)
+    const u = (await res.json()) as Record<string, unknown>
+    expect(u).toMatchObject({ window: '6h', stepMs: 10_000, at: 1000, points: [point], containers: collectorSnap.containers, processes: collectorSnap.processes })
+    expect(u.names).toEqual({ c1: { name: 'dockbench-shop', dockbench: true }, old: { name: 'gone', dockbench: false } })
+  } finally {
+    collectorFake = null
+  }
 })
 
 test('unknown api paths answer 404 json, not the app', async () => {
