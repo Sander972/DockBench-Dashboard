@@ -11,8 +11,13 @@ defineEmits<{ select: [] }>()
 
 const v = computed(() => verdict(props.c))
 const rest = computed(() => props.c.name.replace(/^dockbench-/, ''))
-const pcts = computed(() => [['CPU', cpuPct(props.c)], ['RAM', memPct(props.c)], ['Disk', diskPct(props.c)]] as const)
-const label = computed(() => `${props.c.name}, ${v.value.word}, ${pcts.value.map(([l, p]) => `${l === 'Disk' ? 'disk' : l} ${p.toFixed(0)}%`).join(', ')}`)
+// CPU and RAM come from the collector: without it they are unknown (null), not 0
+const pcts = computed(() => {
+  const usage = store.host?.collector !== false
+  return [['CPU', usage ? cpuPct(props.c) : null], ['RAM', usage ? memPct(props.c) : null], ['Disk', diskPct(props.c)]] as const
+})
+const pctText = (p: number | null) => (p === null ? '·' : p.toFixed(0) + '%')
+const label = computed(() => `${props.c.name}, ${v.value.word}, ${pcts.value.map(([l, p]) => `${l === 'Disk' ? 'disk' : l} ${p === null ? 'unknown' : pctText(p)}`).join(', ')}`)
 </script>
 
 <template>
@@ -20,7 +25,7 @@ const label = computed(() => `${props.c.name}, ${v.value.word}, ${pcts.value.map
     <button type="button" class="hit compact" :data-id="c.id" :aria-current="sel ? 'true' : undefined" :aria-label="label" @click="$emit('select')">
       <Led :sev="v.sev" :blink="v.blink" />
       <span class="rh"><span class="name" :title="c.name">{{ rest }}</span><span v-if="v.sev !== 'ok'" class="state" :class="'s-' + v.sev">{{ v.word }}</span>
-        <span class="pcts" aria-hidden="true"><span v-for="[l, p] in pcts" :key="l"><span class="lbl">{{ l }}</span><span class="num" :class="useCls(p)">{{ p.toFixed(0) }}%</span></span></span></span>
+        <span class="pcts" aria-hidden="true"><span v-for="[l, p] in pcts" :key="l"><span class="lbl">{{ l }}</span><span class="num" :class="p === null ? '' : useCls(p)">{{ pctText(p) }}</span></span></span></span>
     </button>
   </li>
 </template>

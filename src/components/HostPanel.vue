@@ -1,20 +1,28 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { hostUse, store } from '../store'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { hostUse, store, watchUsage } from '../store'
 import { prefs } from '../composables/usePrefs'
 import { now } from '../composables/useNow'
 import { ago, dur, gib, toGiB } from '../lib/format'
+import { hostSeries, span, WINDOW_LABEL } from '../lib/usage'
 import Led from './Led.vue'
 import Meter from './Meter.vue'
 import Sparkline from './Sparkline.vue'
 
-// graph readout: the hovered sample, or the newest one; the age comes from the sample's own time, polls are not evenly spaced
+// the graphs read the collector's history, loaded while this panel is mounted
+onBeforeUnmount(watchUsage())
+const series = computed(() => (store.usage.data ? hostSeries(store.usage.data) : null))
+const sp = computed(() => (store.usage.data ? span(store.usage.data) : { from: 0, to: 0 }))
+// graph readout: the hovered point, or the newest one, with the point's own time
 const hover = ref<{ cpu: number | null; mem: number | null }>({ cpu: null, mem: null })
 function read(m: 'cpu' | 'mem') {
-  const hh = store.hostHistory, a = hh[m], i = hover.value[m] ?? a.length - 1, x = a[i] ?? 0
-  const when = i < a.length - 1 ? ago(hh.t[i], now.value) : 'now'
-  return m === 'cpu' ? `${x.toFixed(1)}% · ${when}` : `${gib(toGiB(x))} of ${gib(toGiB(h.value!.memTotal))} GiB · ${when}`
+  const a = series.value![m], i = hover.value[m] ?? a.length - 1, p = a[i]
+  if (!p) return ''
+  const when = i < a.length - 1 ? ago(p.t, now.value) : 'now'
+  return m === 'cpu' ? `${p.v.toFixed(1)}% · ${when}` : `${gib(toGiB(p.v))} of ${gib(toGiB(h.value!.memTotal))} GiB · ${when}`
 }
+// no collector: the CPU and RAM meters have nothing to show
+const noCollector = computed(() => store.host?.collector === false)
 
 const h = computed(() => store.host)
 const pollText = computed(() => store.dockerDown ? (store.lastGoodAt ? `last good poll ${ago(store.lastGoodAt, now.value)}` : 'no good poll yet') : store.lastPollAt ? `polled ${dur((now.value - store.lastPollAt) / 1000)} ago · every ${prefs.poll}s` : `every ${prefs.poll}s`)
@@ -36,20 +44,21 @@ const census = computed(() => STATES.map(([s, l]) => [l, store.containers.filter
       <code>{{ store.downError }}</code>
     </div>
     <div v-else class="chans">
-      <div class="chan"><span class="lbl">CPU</span><Meter :pct="hostUse?.cpu ?? 0" label="Host CPU" /><span class="v num">{{ h ? hostUse!.cpu.toFixed(0) + '%' : '·' }}</span></div>
-      <div class="chan"><span class="lbl">RAM</span><Meter :pct="hostUse?.mem ?? 0" label="Host memory" /><span class="v num">{{ h ? `${toGiB(h.memUsed).toFixed(1)}/${toGiB(h.memTotal).toFixed(1)}G` : '·' }}</span></div>
+      <div class="chan"><span class="lbl">CPU</span><Meter :pct="hostUse?.cpu ?? 0" label="Host CPU" :off="noCollector" /><span class="v num">{{ h && !noCollector ? hostUse!.cpu.toFixed(0) + '%' : '·' }}</span></div>
+      <div class="chan"><span class="lbl">RAM</span><Meter :pct="hostUse?.mem ?? 0" label="Host memory" :off="noCollector" /><span class="v num">{{ h && !noCollector ? `${toGiB(h.memUsed).toFixed(1)}/${toGiB(h.memTotal).toFixed(1)}G` : '·' }}</span></div>
       <div class="chan"><span class="lbl">Disk</span><Meter :pct="hostUse?.disk ?? 0" label="Host disk" /><span class="v num">{{ h ? `${toGiB(h.diskUsed).toFixed(0)}/${toGiB(h.diskTotal).toFixed(0)}G` : '·' }}</span></div>
     </div>
-    <details v-if="h && !store.dockerDown && store.hostHistory.t.length" class="fold host-graphs" open>
-      <summary><span class="fold-t">CPU and RAM graphs</span><span class="fold-s">Last {{ store.hostHistory.t.length }} samples</span></summary>
+    <p v-if="h && !store.dockerDown && noCollector" class="fine collector-down"><Led sev="warn" /> Collector unreachable: no CPU and RAM figures.</p>
+    <details v-if="h && !store.dockerDown && series?.cpu.length" class="fold host-graphs" open>
+      <summary><span class="fold-t">CPU and RAM graphs</span><span class="fold-s">{{ WINDOW_LABEL[store.usage.data!.window] }}</span></summary>
       <div class="fold-b chs">
         <div class="ch">
           <div class="ch-top"><span class="lbl">CPU</span><span class="ch-foot num">{{ read('cpu') }}</span></div>
-          <Sparkline :samples="store.hostHistory.cpu" :max="100" @hover="i => (hover.cpu = i)" />
+          <Sparkline :points="series.cpu" :from="sp.from" :to="sp.to" :step="store.usage.data!.stepMs" :max="100" @hover="i => (hover.cpu = i)" />
         </div>
         <div class="ch">
           <div class="ch-top"><span class="lbl">RAM</span><span class="ch-foot num">{{ read('mem') }}</span></div>
-          <Sparkline :samples="store.hostHistory.mem" :max="h.memTotal" @hover="i => (hover.mem = i)" />
+          <Sparkline :points="series.mem" :from="sp.from" :to="sp.to" :step="store.usage.data!.stepMs" :max="h.memTotal" @hover="i => (hover.mem = i)" />
         </div>
       </div>
     </details>

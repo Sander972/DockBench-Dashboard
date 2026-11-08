@@ -1,5 +1,5 @@
 import { computed, reactive, watch } from 'vue'
-import type { ActivityEvent, ApiCall, ConfigDiff, ContainerAction, ContainerConfig, DevContainer, DeviceSession, ExecResult, GitKind, GithubRepo, Guarded, HostUsage, PasskeyInfo, Pending, RepoActions, Session, SystemStatus, TelegramClaim, TelegramStatus } from './types'
+import type { ActivityEvent, ApiCall, ConfigDiff, ContainerAction, ContainerConfig, DevContainer, DeviceSession, ExecResult, GitKind, GithubRepo, Guarded, HostUsage, PasskeyInfo, Pending, RepoActions, Session, SystemStatus, TelegramClaim, TelegramStatus, UsageWindow, Utilization } from './types'
 import { api, SignedOut, StepUpRequired } from './api'
 import { feedStale, openLive, sessionGone, type Live } from './api/live'
 import { prefs } from './composables/usePrefs'
@@ -46,8 +46,8 @@ export const store = reactive({
   live: 'off' as 'off' | 'connecting' | 'on', // the SSE feed: on means snapshots arrive and the timer polls skip
   dockerDown: false,
   downError: '', // the failing call, for the error well
-  history: {} as Record<string, { t: number[]; cpu: number[]; mem: number[] }>, // up to 60 samples: ms time, cpu % and mem bytes
-  hostHistory: { t: [] as number[], cpu: [] as number[], mem: [] as number[] }, // same, for the host: one sample per good host answer
+  // the collector's history for every graph: loaded while a graph is mounted (watchers), every 10 s
+  usage: newUsage(),
   logs: {} as Record<string, string[] | undefined>,
   execs: {} as Record<string, ExecState | undefined>,
   pending: {} as Record<string, Pending | undefined>,
@@ -77,6 +77,10 @@ const errText = (e: unknown) => (e instanceof Error ? (e.name === 'NotAllowedErr
 const find = (id: string) => store.containers.find(c => c.id === id)
 
 let toastT: ReturnType<typeof setTimeout> | undefined
+function newUsage() {
+  return { window: '1h' as UsageWindow, data: null as Utilization | null, error: null as string | null, at: 0, watchers: 0 }
+}
+
 export function toast(msg: string, ms = 3200) {
   if (!store.session) return // an action that lands after sign-out must not toast on the sign-in plate
   notify(msg, 'toast') // a long action that ends while the dashboard is in the background
@@ -207,8 +211,8 @@ function expire() {
   store.containers = []
   store.host = null
   store.loading = true
-  store.history = {}
-  store.hostHistory = { t: [], cpu: [], mem: [] }
+  stopUsage()
+  store.usage = newUsage()
   store.logs = {}
   store.execs = {}
   store.pending = {}
@@ -236,13 +240,12 @@ export async function signOut() {
 
 /* ---------- polling ---------- */
 
-function merge(list: DevContainer[], live: boolean) {
+function merge(list: DevContainer[]) {
   for (const fresh of list) {
     const id = fresh.id, cur = find(id)
     fresh.pending = store.pending[id] ?? fresh.pending
     if (!cur) {
       store.containers.push(fresh)
-      store.history[id] = { t: [Date.now()], cpu: [fresh.cpuPct], mem: [fresh.memUsed] } // grows one sample per live poll, up to 60
       continue
     }
     const changed = cur.state !== fresh.state || cur.statusError !== fresh.statusError || cur.restartCount !== fresh.restartCount
@@ -253,18 +256,11 @@ function merge(list: DevContainer[], live: boolean) {
     const v = verdict(cur) // a pending container is never bad, it reads as warn
     if (!wasBad && v.sev === 'bad') notify(`${cur.name}: ${v.word}`, `bad-${id}`, `/bench/${id}`)
     if (changed && store.logs[id]) loadLogs(id)
-    if (live) {
-      const h = store.history[id]
-      h.t.push(Date.now())
-      h.cpu.push(fresh.state === 'running' ? fresh.cpuPct : 0)
-      h.mem.push(fresh.state === 'running' ? fresh.memUsed : 0)
-      if (h.t.length > 60) { h.t.shift(); h.cpu.shift(); h.mem.shift() }
-    }
   }
   const ids = new Set(list.map(c => c.id))
   const gone = store.containers.filter(c => !ids.has(c.id))
   if (!gone.length) return
-  for (const { id } of gone) { delete store.history[id]; delete store.logs[id]; delete store.execs[id]; delete store.claudeLogin[id] }
+  for (const { id } of gone) { delete store.logs[id]; delete store.execs[id]; delete store.claudeLogin[id] }
   store.containers = store.containers.filter(c => ids.has(c.id))
 }
 
@@ -276,9 +272,6 @@ function setHost(host: HostUsage) {
   if (host.reachable) {
     store.host = host
     store.lastGoodAt = Date.parse(host.polledAt)
-    const h = store.hostHistory
-    h.t.push(Date.now()); h.cpu.push(host.cpuPct); h.mem.push(host.memUsed)
-    if (h.t.length > 60) { h.t.shift(); h.cpu.shift(); h.mem.shift() }
   }
   return host
 }
@@ -292,7 +285,7 @@ export function connectLive() {
   if (liveConn || !store.session || asleep()) return
   store.live = 'connecting'
   liveConn = openLive({
-    snapshot: ({ host, containers }) => { setHost(host); merge(containers, host.reachable); store.loading = false; store.live = 'on' },
+    snapshot: ({ host, containers }) => { setHost(host); merge(containers); store.loading = false; store.live = 'on' },
     down: error => { store.dockerDown = true; store.downError = error; store.lastPollAt = Date.now(); store.loading = false; store.live = 'on' },
     connecting: () => { store.live = 'connecting' },
     signedOut: () => expire(),
@@ -316,7 +309,7 @@ export function poll(opts: { force?: boolean } = {}): Promise<void> {
     try {
       // the host panel fills in as soon as /api/host answers, the container list can take longer
       const [host, list] = await Promise.allSettled([api.getHost().then(setHost), api.getContainers()])
-      if (host.status === 'fulfilled' && list.status === 'fulfilled') merge(list.value, host.value.reachable)
+      if (host.status === 'fulfilled' && list.status === 'fulfilled') merge(list.value)
       else {
         const errs = [host, list].flatMap(r => (r.status === 'rejected' ? [r.reason] : []))
         if (errs.some(e => e instanceof SignedOut)) expire()
@@ -889,6 +882,53 @@ async function runTelegram(op: TgOp) {
 /* ---------- dashboard and bot images ---------- */
 
 // quiet: a failing background load must not toast every 5 minutes, the panel shows the last answer
+/* ---------- usage (the collector's history) ---------- */
+
+let usageTimer: ReturnType<typeof setInterval> | undefined
+
+export async function loadUsage() {
+  const w = store.usage.window
+  try {
+    const data = await api.getUtilization(w)
+    if (store.usage.window !== w) return
+    store.usage.data = data
+    store.usage.error = null
+    store.usage.at = Date.now()
+  } catch (e) {
+    if (e instanceof SignedOut) return expire()
+    if (store.usage.window !== w) return
+    // the graphs go empty rather than show an old window as if it were current
+    store.usage.data = null
+    store.usage.error = errText(e)
+  }
+}
+
+function stopUsage() {
+  clearInterval(usageTimer)
+  usageTimer = undefined
+}
+
+// every mounted graph registers here: the first one loads and starts a 10 s refresh, the last one to leave stops it, so one open dashboard asks once every 10 s however many graphs it shows. Call the returned function on unmount.
+export function watchUsage(): () => void {
+  if (store.usage.watchers++ === 0) {
+    loadUsage()
+    usageTimer = setInterval(() => { if (!asleep()) loadUsage() }, 10_000)
+  }
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    if (--store.usage.watchers === 0) stopUsage()
+  }
+}
+
+export function setUsageWindow(w: UsageWindow) {
+  if (store.usage.window === w) return
+  store.usage.window = w
+  store.usage.data = null
+  loadUsage()
+}
+
 export async function loadSystem() {
   try { store.system = await api.getSystem() } catch (e) { if (e instanceof SignedOut) expire() }
 }
@@ -900,7 +940,7 @@ export async function checkSystem() {
   store.sys.error = ''
   try {
     const s = store.system = await api.checkSystem()
-    const rows = [s.dashboard, s.telegram].filter(r => r.deployed)
+    const rows = [s.dashboard, s.collector, s.telegram].filter(r => r.deployed)
     const failed = rows.find(r => r.checkError)
     const n = rows.filter(r => r.imageUpdate).length
     toast(failed ? `Could not pull ${failed.name}: ${failed.checkError}` : n ? `${n} newer image${n > 1 ? 's' : ''} pulled, ready to install` : 'The dashboard and the bot run the newest images')

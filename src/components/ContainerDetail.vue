@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUpdate, onUpdated, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onBeforeUpdate, onUpdated, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { applyConfig, cancelStepUp, checkImages, confirmStepUp, containerAction, gitExec, loadClaudeDiff, loadVscode, pullClaudeConfig, refreshLogs, replaceVscode, store, switchClaudeAccount, toast } from '../store'
+import { applyConfig, cancelStepUp, checkImages, confirmStepUp, containerAction, gitExec, loadClaudeDiff, loadVscode, pullClaudeConfig, refreshLogs, replaceVscode, store, switchClaudeAccount, toast, watchUsage } from '../store'
 import { prefs } from '../composables/usePrefs'
 import { useNow } from '../composables/useNow'
 import { ago, DISK_BUDGET, dur, gib, ms, repoLabel, repoUrl, since, toGiB, useCls } from '../lib/format'
 import { cpuPct, diskBytes, diskPct, memPct, verdict } from '../lib/verdict'
 import { diffRows } from '../lib/diff'
+import { byName, containerSeries, span } from '../lib/usage'
 import AppIcon from './AppIcon.vue'
 import CiRuns from './CiRuns.vue'
 import ClaudeLoginCallout from './ClaudeLoginCallout.vue'
@@ -34,7 +35,14 @@ const fresh = computed(() => run.value && !!st.value && !c.value!.statusError)
 const exec = computed(() => store.execs[props.id])
 const busy = computed(() => !!c.value?.pending || store.dockerDown || !!exec.value?.running)
 const cf = computed(() => (store.confirm?.target === props.id ? store.confirm : null))
-const hist = computed(() => store.history[props.id] ?? { t: [], cpu: [], mem: [] })
+// the trend reads the collector's history, loaded while this detail is mounted; by name, so a recreated container keeps its line
+onBeforeUnmount(watchUsage())
+const hist = computed(() => {
+  const d = store.usage.data
+  if (!d || !c.value) return null
+  const s = containerSeries(d, byName(d).get(c.value.name)?.ids ?? [props.id])
+  return s.cpu.length ? { ...s, ...span(d), step: d.stepMs } : null
+})
 const ncpu = computed(() => store.host?.ncpu ?? 1)
 const sh = computed(() => props.id.slice(0, 12))
 const hint = computed(() => 'Press and hold about a second to confirm.' + (store.session?.passkeys ? ' Then confirm with your passkey, unless you did in the last 5 minutes.' : ''))
@@ -194,7 +202,7 @@ onUpdated(() => {
             </template>
             <div class="vital" :title="`Writable layer ${gib(toGiB(c.diskRw))} GiB, /home/dev volume ${gib(toGiB(c.diskVolume))} GiB, budget ${toGiB(DISK_BUDGET)} GiB`"><span class="lbl">Disk</span><span class="num big" :class="useCls(diskPct(c))">{{ diskPct(c).toFixed(0) }}%</span><span class="num v-sub">{{ gib(toGiB(diskBytes(c))) }}/{{ toGiB(DISK_BUDGET) }} GiB</span></div>
           </div>
-          <TrendChart v-if="run" :t="hist.t" :cpu="hist.cpu" :mem="hist.mem" />
+          <TrendChart v-if="run && hist" :cpu="hist.cpu" :mem="hist.mem" :from="hist.from" :to="hist.to" :step="hist.step" />
           <p v-else class="fine">Docker reports no CPU or memory for a {{ c.state === 'exited' ? 'stopped' : c.state }} container.</p>
         </section>
 

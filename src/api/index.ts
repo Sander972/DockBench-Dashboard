@@ -1,4 +1,4 @@
-import type { ActivityEvent, ApiCall, ConfigDiff, ConfigResult, ContainerAction, ContainerConfig, DeployRequest, DevContainer, DeviceSession, ExecResult, GitKind, GithubRepo, HostUsage, ImageCheck, PasskeyInfo, RepoActions, SelfUpdateResult, Session, StepUpPrefs, SystemStatus, TelegramClaim, TelegramStatus, RemoveResult, UpdateResult } from '../types'
+import type { ActivityEvent, ApiCall, ConfigDiff, ConfigResult, ContainerAction, ContainerConfig, DeployRequest, DevContainer, DeviceSession, ExecResult, GitKind, GithubRepo, HostUsage, ImageCheck, PasskeyInfo, RepoActions, SelfUpdateResult, Session, StepUpPrefs, SystemStatus, TelegramClaim, TelegramStatus, RemoveResult, UpdateResult, UsageWindow, Utilization } from '../types'
 import { http } from './http'
 
 export { SignedOut, StepUpRequired } from './errors'
@@ -20,6 +20,8 @@ export interface Api {
   signOut(all?: boolean): Promise<void>
   getHost(): Promise<HostUsage>
   getContainers(): Promise<DevContainer[]>
+  // the collector's history over a window with its latest snapshot; fails with 'collector unreachable' when it does not answer
+  getUtilization(window: UsageWindow): Promise<Utilization>
   getLogs(id: string): Promise<string[]>
   // update answers UpdateResult, remove RemoveResult, the others {}
   containerAction(id: string, action: ContainerAction): Promise<Partial<UpdateResult> & Partial<RemoveResult>>

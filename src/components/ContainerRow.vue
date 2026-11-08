@@ -14,8 +14,10 @@ defineEmits<{ select: [] }>()
 const v = computed(() => verdict(props.c))
 const run = computed(() => props.c.state === 'running')
 const rest = computed(() => props.c.name.replace(/^dockbench-/, ''))
-const cpuV = computed(() => run.value ? cpuPct(props.c).toFixed(0) + '%' : '·')
-const memV = computed(() => run.value ? short(toGiB(props.c.memUsed)) : '·')
+// CPU and RAM come from the collector: without it they are unknown, not 0
+const usage = computed(() => run.value && store.host?.collector !== false)
+const cpuV = computed(() => usage.value ? cpuPct(props.c).toFixed(0) + '%' : '·')
+const memV = computed(() => usage.value ? short(toGiB(props.c.memUsed)) : '·')
 const diskV = computed(() => short(toGiB(diskBytes(props.c))))
 const ci = computed(() => store.ci[props.c.name])
 </script>
@@ -34,8 +36,8 @@ const ci = computed(() => store.ci[props.c.name])
         <template v-else>{{ c.state }}</template>
       </span>
       <span class="mms">
-        <span class="mm"><span class="lbl">CPU</span><span class="num">{{ cpuV }}</span><Meter :pct="cpuPct(c)" :n="10" :label="`CPU ${cpuV}`" :off="!run" /></span>
-        <span class="mm"><span class="lbl">RAM</span><span class="num">{{ memV }}</span><Meter :pct="memPct(c)" :n="10" :label="`RAM ${memV}`" :off="!run" /></span>
+        <span class="mm"><span class="lbl">CPU</span><span class="num">{{ cpuV }}</span><Meter :pct="cpuPct(c)" :n="10" :label="`CPU ${cpuV}`" :off="!usage" /></span>
+        <span class="mm"><span class="lbl">RAM</span><span class="num">{{ memV }}</span><Meter :pct="memPct(c)" :n="10" :label="`RAM ${memV}`" :off="!usage" /></span>
         <span class="mm"><span class="lbl">Disk</span><span class="num">{{ diskV }}</span><Meter :pct="diskPct(c)" :n="10" :label="`Disk ${diskV} of 20G budget`" /></span>
       </span>
     </button>

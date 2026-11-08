@@ -63,7 +63,16 @@ export interface DevContainer {
 // installClaude: INSTALL_CLAUDE; injectClaudeConfig: CLAUDE_CONFIG_REPO set; vscodeConfig: VSCODE_CONFIG (seeds the VS Code Machine settings on a new home volume)
 export interface ContainerConfig { installClaude: boolean; injectClaudeConfig: boolean; vscodeConfig: boolean }
 
-export interface HostUsage { name: string; ncpu: number; memTotal: number; diskTotal: number; dockerVersion: string; cpuPct: number; memUsed: number; diskUsed: number; polledAt: string; reachable: boolean }
+// cpuPct, memUsed, stealPct, load1 and psiCpuSome10 come from the collector: 0 with collector false when it does not answer
+export interface HostUsage { name: string; ncpu: number; memTotal: number; diskTotal: number; dockerVersion: string; cpuPct: number; memUsed: number; stealPct: number; load1: number; psiCpuSome10: number; collector: boolean; diskUsed: number; polledAt: string; reachable: boolean }
+
+// GET /api/utilization?window=: the collector's history over a window (points keyed by container id or "host" for top) with its latest snapshot and every id resolved to a name
+export type UsageWindow = '1h' | '6h' | '24h'
+export interface UsageTop { comm: string; pids: number[]; cpuPct: number; rss: number }
+export interface UsagePoint { t: number; host: { cpuPct: number; stealPct: number; memUsed: number; load1: number }; containers: Record<string, { name: string; cpuPct: number; memUsed: number }>; top: Record<string, UsageTop[]> }
+export interface UsageContainer { id: string; name: string; image: string; dockbench: boolean; cpuPct: number; memUsed: number; memLimit: number }
+export interface UsageProcess { comm: string; pids: number[]; container: string; cpuPct: number; rss: number }
+export interface Utilization { window: UsageWindow; stepMs: number; at: number; points: UsagePoint[]; containers: UsageContainer[]; processes: UsageProcess[]; names: Record<string, { name: string; dockbench: boolean }> }
 
 export interface ApiCall { method: string; path: string; status: number | null }
 
