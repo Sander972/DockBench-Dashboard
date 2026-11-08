@@ -1,4 +1,4 @@
-use dockbench_collector::proc;
+use dockbench_collector::sample::{Sampler, SamplerCfg};
 use std::env;
 use std::path::PathBuf;
 
@@ -30,13 +30,22 @@ impl Config {
     }
 }
 
+impl Config {
+    pub fn sampler(&self) -> SamplerCfg {
+        SamplerCfg { proc_root: PathBuf::from("/proc"), cg_root: PathBuf::from("/sys/fs/cgroup"), docker_sock: self.docker_sock.clone(), interval_ms: self.interval_ms }
+    }
+}
+
 fn main() {
-    let _cfg = Config::from_env();
+    let cfg = Config::from_env();
     if env::args().any(|a| a == "--once") {
-        match proc::read_host() {
-            Ok(h) => println!("{}", serde_json::to_string(&h).unwrap()),
-            Err(e) => {
-                eprintln!("dockbench-collector: {e}");
+        let mut s = Sampler::new(cfg.sampler());
+        s.tick();
+        std::thread::sleep(std::time::Duration::from_millis(cfg.interval_ms));
+        match s.tick() {
+            Some(snap) => println!("{}", serde_json::to_string(&snap).unwrap()),
+            None => {
+                eprintln!("dockbench-collector: cannot read /proc");
                 std::process::exit(1);
             }
         }

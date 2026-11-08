@@ -2,6 +2,8 @@ pub mod proc;
 pub mod procs;
 pub mod cgroups;
 pub mod docker;
+pub mod history;
+pub mod sample;
 
 #[cfg(test)]
 pub(crate) mod testutil {
