@@ -3,6 +3,7 @@ pub mod procs;
 pub mod cgroups;
 pub mod docker;
 pub mod history;
+pub mod http;
 pub mod sample;
 
 #[cfg(test)]
