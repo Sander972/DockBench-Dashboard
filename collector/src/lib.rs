@@ -1,5 +1,7 @@
 pub mod proc;
 pub mod procs;
+pub mod cgroups;
+pub mod docker;
 
 #[cfg(test)]
 pub(crate) mod testutil {

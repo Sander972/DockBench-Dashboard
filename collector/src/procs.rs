@@ -44,7 +44,7 @@ pub fn parse_statm_rss(s: &str, page: u64) -> u64 {
     s.split_whitespace().nth(1).and_then(|x| x.parse::<u64>().ok()).unwrap_or(0) * page
 }
 
-fn is_docker_id(s: &str) -> bool {
+pub(crate) fn is_docker_id(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
