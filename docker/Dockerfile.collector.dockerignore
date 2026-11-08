@@ -1,0 +1,4 @@
+*
+!collector/Cargo.toml
+!collector/Cargo.lock
+!collector/src

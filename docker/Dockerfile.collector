@@ -1,0 +1,20 @@
+# The collector is a static arm64 musl binary cross-built on the build platform, so CI needs no QEMU; the image holds nothing else.
+FROM --platform=$BUILDPLATFORM messense/rust-musl-cross:aarch64-musl@sha256:02e790506c5f15a533bc05b3af8719b16a8a2314480f6f0fdc0166432035d9b4 AS build
+WORKDIR /src
+# Dependencies first, against stub sources, so a code change does not rebuild serde.
+COPY collector/Cargo.toml collector/Cargo.lock ./
+RUN mkdir src && echo 'fn main() {}' > src/main.rs && touch src/lib.rs \
+ && cargo build --release --locked --target aarch64-unknown-linux-musl
+COPY collector/src ./src
+# COPY keeps the context's older mtimes: touch so cargo rebuilds over the stubs.
+RUN touch src/main.rs src/lib.rs \
+ && cargo build --release --locked --target aarch64-unknown-linux-musl
+
+FROM scratch
+LABEL org.opencontainers.image.source=https://github.com/Sander972/DockBench-Dashboard \
+      org.opencontainers.image.description="Resource utilization collector for the DockBench dashboard" \
+      org.opencontainers.image.licenses=MIT
+COPY --from=build /src/target/aarch64-unknown-linux-musl/release/dockbench-collector /dockbench-collector
+ENV PORT=9100 DATA_DIR=/data
+EXPOSE 9100
+ENTRYPOINT ["/dockbench-collector"]

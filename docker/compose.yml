@@ -13,19 +13,41 @@ services:
       PORTAINER_API_KEY: ${PORTAINER_API_KEY}
       PORTAINER_ENDPOINT_ID: ${PORTAINER_ENDPOINT_ID}
       DOCKBENCH_IMAGE: ${DOCKBENCH_IMAGE:-ghcr.io/sander972/dockbench:latest}
+      COLLECTOR_URL: http://dockbench-collector:9100
     volumes:
       - data:/data
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - devnet
       - proxy
+      - monitor
+    restart: unless-stopped
+
+  # Samples host, container and process usage for the dashboard. pid and cgroup host: it sees every process with plain cgroup paths. Only the dashboard reaches it, over the internal monitor network.
+  collector:
+    image: ghcr.io/sander972/dockbench-collector:latest
+    container_name: dockbench-collector
+    pid: host
+    cgroup: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - collector:/data
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - monitor
     restart: unless-stopped
 
 volumes:
   data:
+  collector:
 
 networks:
   devnet:
     external: true
   proxy:
     external: true
+  monitor:
+    internal: true
