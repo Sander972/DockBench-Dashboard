@@ -15,7 +15,7 @@ import { createStack, deleteStack, findStack, fromStackFile, patchEnv, pullImage
 import { deploy, DeployFailure, REPO_RE, validateDeploy } from './deploy'
 import { deleteKeys, keyTitle, removeStack, stackKeys } from './remove'
 import { generateDeployKey } from './sshkey'
-import { deviceCode, fetchStatus, imageChecker, lastError, shared, statusTracker, updateAvailable } from './containers'
+import { deviceCode, fetchStatus, imageChecker, inspectCache, lastError, shared, statusTracker, ttlCache, updateAvailable } from './containers'
 import { botName, dockerGid, fetchBotStatus, getMe, setupCode, telegramEnv, TELEGRAM_IMAGE, TELEGRAM_NAME, validToken, type BotStatus } from './telegram'
 import { BOOT_ID, COLLECTOR_NAME, DASHBOARD_NAME, imageRow } from './system'
 import { runsCache, summarize } from './actions'
@@ -135,8 +135,11 @@ async function dockbench(id: string) {
   return r
 }
 
-// /system/df walks every container layer and volume, so it is far too slow to run on each poll, and the daemon refuses a second one while one runs. ponytail: disk sizes lag up to 60 s plus two df runs, read 0 until the first df answers, and keep the last good sizes while df fails.
-const diskSizes = shared(60_000, () => systemDf(env.dockerHost), { rw: new Map<string, number>(), volumes: new Map<string, number>() })
+// /system/df walks every container layer and volume (12-17 s of dockerd on the VPS for ~76 GB of /home/dev volumes), so it is far too slow to run on each poll, and the daemon refuses a second one while one runs. ponytail: disk sizes lag up to 15 min plus two df runs, read 0 until the first df answers, and keep the last good sizes while df fails.
+const diskSizes = shared(15 * 60_000, () => systemDf(env.dockerHost), { rw: new Map<string, number>(), volumes: new Map<string, number>() })
+// the live tick's inspect per container, and Docker's /info (name, cores, RAM, version), reused between ticks instead of asked every 2 s
+const inspects = inspectCache((id) => inspectContainer(env.dockerHost, id))
+const info = ttlCache(5 * 60_000, () => dockerInfo(env.dockerHost))
 // host, container and process usage from the collector container; one /metrics answer per live interval serves both views of a tick
 const collector = createCollector(env.collectorUrl, 2000)
 const statusView = statusTracker((name) => fetchStatus(`http://${name}:8080/status`))
@@ -266,6 +269,7 @@ function containerAction(a: 'start' | 'stop' | 'restart') {
       const started = Date.now()
       try {
         call.status = await containerPost(env.dockerHost, id, a)
+        inspects.forget(id) // a restart keeps the state running: the next tick must see the new start time
         await log(req, server, PAST[a], c.name, { calls: [call], ms: Date.now() - started })
         return json({})
       } catch (e) {
@@ -293,7 +297,7 @@ async function hostView() {
   const polledAt = new Date().toISOString()
   const [snap, docker] = await Promise.all([
     collector.latest(),
-    Promise.all([dockerInfo(env.dockerHost), diskUsage(env.dataDir).catch(() => ({ diskTotal: 0, diskUsed: 0 }))]).catch(() => null),
+    Promise.all([info(), diskUsage(env.dataDir).catch(() => ({ diskTotal: 0, diskUsed: 0 }))]).catch(() => null),
   ])
   const h = snap?.host
   const usage = { cpuPct: h?.cpuPct ?? 0, memUsed: h?.memUsed ?? 0, stealPct: h?.stealPct ?? 0, load1: h?.load1 ?? 0, psiCpuSome10: h?.psiCpuSome10 ?? 0, collector: !!snap }
@@ -306,8 +310,9 @@ async function containersView() {
   const [rows, snap] = await Promise.all([listDockbench(env.dockerHost), collector.latest()])
   const df = diskSizes()
   const fetched = await lastFetches()
+  inspects.keep(rows.map((r) => r.id))
   return Promise.all(rows.map(async (r) => {
-    const x = await inspectContainer(env.dockerHost, r.id)
+    const x = await inspects.get(r.id, r.state)
     const running = r.state === 'running'
     const s = running ? snap?.containers.find((c) => c.id === r.id) : undefined
     const sv = await statusView(r.id, r.name, x.startedAt, running)

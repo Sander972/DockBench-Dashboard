@@ -80,6 +80,7 @@ pub struct Sampler {
     prev: Option<Raw>,
     names: HashMap<String, ContainerInfo>,
     names_at: Option<Instant>,
+    walker: procs::Walker,
     cfg: SamplerCfg,
 }
 
@@ -89,7 +90,7 @@ fn pct(part: u64, whole: u64) -> f64 {
 
 impl Sampler {
     pub fn new(cfg: SamplerCfg) -> Sampler {
-        Sampler { prev: None, names: HashMap::new(), names_at: None, cfg }
+        Sampler { prev: None, names: HashMap::new(), names_at: None, walker: procs::Walker::default(), cfg }
     }
 
     /// Refreshes the id → name map every 10 s or when a cgroup id is unknown; a failed refresh keeps the old map, and a name stays while its cgroup still exists.
@@ -113,7 +114,7 @@ impl Sampler {
     /// Reads one sample; `None` on the first call (no deltas yet) or when the host files cannot be read.
     pub fn tick(&mut self) -> Option<Snapshot> {
         let host = proc::read_host_at(&self.cfg.proc_root).ok()?;
-        let cur = Raw { host, cgs: cgroups::list(&self.cfg.cg_root), procs: procs::walk(&self.cfg.proc_root) };
+        let cur = Raw { host, cgs: cgroups::list(&self.cfg.cg_root), procs: self.walker.walk(&self.cfg.proc_root) };
         self.refresh_names(&cur.cgs);
         let Some(prev) = self.prev.replace(cur) else { return None };
         let cur = self.prev.as_ref().unwrap();
@@ -173,8 +174,7 @@ mod tests {
         fs::write(proc_root.join("stat"), format!("cpu  {user} 0 0 {idle} 0 0 0 0 0 0\ncpu0 0 0 0 0\ncpu1 0 0 0 0\n")).unwrap();
         fs::write(proc_root.join("meminfo"), "MemTotal: 1000 kB\nMemAvailable: 400 kB\n").unwrap();
         fs::write(proc_root.join("loadavg"), "1.5 1.0 0.5 1/100 77\n").unwrap();
-        fs::write(proc_root.join("77/stat"), format!("77 (node) S 1 1 1 0 -1 0 0 0 0 0 {pid_jiffies} 0 0 0 20 0 1 0 100 0 0\n")).unwrap();
-        fs::write(proc_root.join("77/statm"), "1000 600 0 0 0 0 0\n").unwrap();
+        fs::write(proc_root.join("77/stat"), format!("77 (node) S 1 1 1 0 -1 0 0 0 0 0 {pid_jiffies} 0 0 0 20 0 1 0 100 1000 600\n")).unwrap();
         fs::write(proc_root.join("77/cgroup"), format!("0::/system.slice/docker-{id}.scope\n")).unwrap();
         let scope = cg_root.join(format!("system.slice/docker-{id}.scope"));
         fs::create_dir_all(&scope).unwrap();

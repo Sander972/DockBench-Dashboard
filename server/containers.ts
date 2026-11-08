@@ -94,6 +94,38 @@ export function shared<T>(ttlMs: number, load: () => Promise<T>, initial: T): ()
   }
 }
 
+// Inspect answers per container id for the live tick, reused while the container list shows the same state and the answer is younger than ttlMs: inspect changes only when a container starts, stops or restarts (a recreate brings a new id). A state change refetches at once, the ttl bounds a restart the list only ever showed as running, and forget() drops one after the dashboard's own action. A failed inspect is not kept.
+export function inspectCache<T>(inspect: (id: string) => Promise<T>, ttlMs = 10_000) {
+  const known = new Map<string, { state: string; at: number; p: Promise<T> }>()
+  return {
+    get(id: string, state: string): Promise<T> {
+      const k = known.get(id)
+      if (k && k.state === state && performance.now() - k.at < ttlMs) return k.p
+      const p = inspect(id)
+      known.set(id, { state, at: performance.now(), p })
+      p.catch(() => { if (known.get(id)?.p === p) known.delete(id) })
+      return p
+    },
+    forget(id: string) { known.delete(id) },
+    // the ids still listed; the others (removed, recreated under a new id) are dropped
+    keep(ids: string[]) { const live = new Set(ids); for (const id of known.keys()) if (!live.has(id)) known.delete(id) },
+  }
+}
+
+// One answer shared for ttlMs from when it arrived, for facts that do not change between ticks (Docker's /info). A failure is not kept, so the next call asks again.
+export function ttlCache<T>(ttlMs: number, load: () => Promise<T>): () => Promise<T> {
+  let cached: { at: number; p: Promise<T> } | null = null
+  return () => {
+    if (!cached || performance.now() - cached.at >= ttlMs) {
+      const p = load()
+      const entry = { at: Number.POSITIVE_INFINITY, p }
+      cached = entry
+      p.then(() => { entry.at = performance.now() }, () => { if (cached === entry) cached = null })
+    }
+    return cached.p
+  }
+}
+
 export interface ImageCheck {
   imageId: string | null
   at: number
