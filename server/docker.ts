@@ -1,4 +1,7 @@
+// a hung dockerd must fail a call instead of stalling the live tick, a deploy or a config save forever, so a call without its own signal gives up after DOCKER_TIMEOUT.ms (an object so tests can shorten it); calls that wait for longer by design pass their own
+export const DOCKER_TIMEOUT = { ms: 10_000 }
 export function dockerFetch(host: string, path: string, init: BunFetchRequestInit = {}): Promise<Response> {
+  init = { ...init, signal: init.signal ?? AbortSignal.timeout(DOCKER_TIMEOUT.ms) }
   if (host.startsWith('tcp://') || host.startsWith('http://')) return fetch(host.replace(/^tcp:/, 'http:') + path, init)
   return fetch('http://docker' + path, { ...init, unix: host })
 }
@@ -43,6 +46,8 @@ export interface Inspect {
   project: string | null
   // deploy options as the container was created with them; unset variables read as the image defaults
   config: { installClaude: boolean; injectClaudeConfig: boolean; vscodeConfig: boolean }
+  // the entrypoint script the container runs (Docker's Path), which runsEntrypoint looks for
+  entrypoint: string | null
 }
 
 const ZERO_TIME = '0001-01-01T00:00:00Z'
@@ -58,7 +63,7 @@ export async function inspectContainer(host: string, id: string): Promise<Inspec
   const res = await dockerFetch(host, `/containers/${id}/json`)
   if (res.status === 404) throw new ContainerGone(id)
   if (!res.ok) throw new Error(`Docker inspect returned ${res.status}`)
-  const c = (await res.json()) as { Image: string; State: { Status: string; StartedAt: string; FinishedAt: string; ExitCode: number }; RestartCount: number; HostConfig: { Memory: number }; Config: { Env: string[]; Image: string; Labels?: Record<string, string> | null }; Mounts?: { Destination: string; Name?: string }[] }
+  const c = (await res.json()) as { Path?: string; Image: string; State: { Status: string; StartedAt: string; FinishedAt: string; ExitCode: number }; RestartCount: number; HostConfig: { Memory: number }; Config: { Env: string[]; Image: string; Labels?: Record<string, string> | null }; Mounts?: { Destination: string; Name?: string }[] }
   const env = Object.fromEntries(c.Config.Env.map((e) => e.split(/=(.*)/s).slice(0, 2)))
   const exited = c.State.Status === 'exited' || c.State.Status === 'dead'
   return {
@@ -73,7 +78,18 @@ export async function inspectContainer(host: string, id: string): Promise<Inspec
     imageId: c.Image,
     project: c.Config.Labels?.['com.docker.compose.project'] ?? null,
     config: { installClaude: env.INSTALL_CLAUDE !== '0', injectClaudeConfig: !!env.CLAUDE_CONFIG_REPO, vscodeConfig: env.VSCODE_CONFIG !== '0' },
+    entrypoint: c.Path || null,
   }
+}
+
+// whether a process of the container still runs its entrypoint script: the DockBench entrypoint starts the status server near its end and then execs into code tunnel, so while it runs (clone, mise install, setup.sh, however long) a silent /status means starting, not dead. docker-init (compose init: true) carries the script path in its own arguments and is skipped.
+export async function runsEntrypoint(host: string, id: string, path: string): Promise<boolean> {
+  const res = await dockerFetch(host, `/containers/${id}/top`)
+  if (!res.ok) throw new Error(`Docker top returned ${res.status}`)
+  const { Titles, Processes } = (await res.json()) as { Titles: string[]; Processes: string[][] | null }
+  const cmd = Titles.indexOf('CMD')
+  if (cmd < 0) throw new Error('Docker top has no CMD column')
+  return (Processes ?? []).some((p) => { const args = (p[cmd] ?? '').split(' '); return !args[0].endsWith('docker-init') && args.includes(path) })
 }
 
 // Docker multiplexes stdout and stderr when the container or exec has no TTY: 8-byte frames, byte 0 the stream (0-2), bytes 4-7 the big-endian payload length. A TTY stream is raw text, told apart by a first byte that is not a stream id or non-zero padding.
@@ -105,16 +121,16 @@ export async function containerLogs(host: string, id: string, tail: number): Pro
   return logLines(demux(new Uint8Array(await res.arrayBuffer())))
 }
 
-// start, stop, restart. 304 means it already was in that state, which is what the caller wanted.
+// start, stop, restart. 304 means it already was in that state, which is what the caller wanted. Stop and restart wait for the container to exit (Docker gives it 10 s), hence the longer timeout.
 export async function containerPost(host: string, id: string, action: 'start' | 'stop' | 'restart'): Promise<number> {
-  const res = await dockerFetch(host, `/containers/${id}/${action}`, { method: 'POST' })
+  const res = await dockerFetch(host, `/containers/${id}/${action}`, { method: 'POST', signal: AbortSignal.timeout(60_000) })
   if (!res.ok && res.status !== 304) throw new Error(`Docker ${action} returned ${res.status}: ${(await res.text()).slice(0, 300)}`)
   return res.status
 }
 
-// force: a running container goes too. 404 means it is already gone, which is what the caller wanted.
+// force: a running container goes too (killed first, then its writable layer deleted, hence the longer timeout). 404 means it is already gone, which is what the caller wanted.
 export async function removeContainer(host: string, id: string): Promise<void> {
-  const res = await dockerFetch(host, `/containers/${id}?force=true`, { method: 'DELETE' })
+  const res = await dockerFetch(host, `/containers/${id}?force=true`, { method: 'DELETE', signal: AbortSignal.timeout(120_000) })
   if (!res.ok && res.status !== 404) throw new Error(`Docker remove container returned ${res.status}: ${(await res.text()).slice(0, 300)}`)
 }
 
@@ -125,9 +141,9 @@ export async function stackVolumes(host: string, project: string): Promise<strin
   return (((await res.json()) as { Volumes: { Name: string }[] | null }).Volumes ?? []).map((v) => v.Name)
 }
 
-// 404 means it is already gone; Docker answers 409 while a container still uses it
+// 404 means it is already gone; Docker answers 409 while a container still uses it. Deleting a large home volume takes a while, hence the longer timeout.
 export async function removeVolume(host: string, name: string): Promise<void> {
-  const res = await dockerFetch(host, `/volumes/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  const res = await dockerFetch(host, `/volumes/${encodeURIComponent(name)}`, { method: 'DELETE', signal: AbortSignal.timeout(300_000) })
   if (!res.ok && res.status !== 404) throw new Error(`Docker remove volume ${name} returned ${res.status}: ${(await res.text()).slice(0, 300)}`)
 }
 

@@ -140,7 +140,8 @@ export interface Stack {
 
 export async function createStack(cfg: PortainerConfig, name: string, env: { name: string; value: string }[], file = STACK_FILE): Promise<{ Id: number }> {
   const res = await pf(cfg, `/api/stacks/create/standalone/string?endpointId=${cfg.endpointId}`, { method: 'POST', body: JSON.stringify({ name, stackFileContent: file, env }) })
-  if (!res.ok) throw new Error(`Portainer create stack returned ${res.status}: ${(await res.text()).slice(0, 300)}`)
+  // status: what answered, so the caller can tell Portainer refusing from a proxy that gave up while compose up still runs
+  if (!res.ok) throw Object.assign(new Error(`Portainer create stack returned ${res.status}: ${(await res.text()).slice(0, 300)}`), { status: res.status })
   return res.json() as Promise<{ Id: number }>
 }
 

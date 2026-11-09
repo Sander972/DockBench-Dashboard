@@ -59,21 +59,27 @@ export interface DeployResult {
   warning?: string
 }
 
-// A failed create answer can still mean a created stack: asks Portainer (one more call in calls), then answers the warning when the stack exists, so the deploy is reported done instead of a failure followed by a 409 on the next try; otherwise rethrows e, after onNone when Portainer confirms there is no stack (not when that lookup fails too).
-export async function afterFailedCreate(e: unknown, calls: ApiCall[], findStack: () => Promise<{ Id: number } | null>, onNone?: () => Promise<void>): Promise<string> {
-  const check: ApiCall = { method: 'GET', path: '/api/stacks', status: null }
-  calls.push(check)
-  const stack = await findStack().then((s) => { check.status = 200; return s }, () => undefined)
-  if (stack === null) await onNone?.()
-  if (!stack) throw e
-  return `Portainer created the stack, but its answer was lost: ${(e as Error).message}`
+// A failed create answer can still mean a created stack: asks Portainer (one call in calls per lookup), then answers the warning when the stack exists, so the deploy is reported done instead of a failure followed by a 409 on the next try. When Portainer itself refused (a status other than a gateway's 502, 503 or 504) one lookup settles it, and onNone runs when it confirms there is no stack. When the answer was lost (network error, timeout, gateway status), Portainer may still be running compose up and saves the stack only after it, so the lookup is repeated lostChecks times waitMs apart, and onNone never runs: keys deleted under a stack saved late leave a container that cannot clone, while a key left over is only clutter. Otherwise rethrows e.
+export async function afterFailedCreate(e: unknown, calls: ApiCall[], findStack: () => Promise<{ Id: number } | null>, onNone?: () => Promise<void>, sleep: (ms: number) => Promise<void> = (ms) => Bun.sleep(ms), lostChecks = 6, waitMs = 5000): Promise<string> {
+  // deploy() wraps the create error in a DeployFailure whose own status is the dashboard's answer, so Portainer's status is read from the original
+  const status = ((e instanceof DeployFailure ? e.cause : e) as { status?: unknown } | undefined)?.status
+  const refused = typeof status === 'number' && ![502, 503, 504].includes(status)
+  for (let left = refused ? 1 : lostChecks; ; ) {
+    const check: ApiCall = { method: 'GET', path: '/api/stacks', status: null }
+    calls.push(check)
+    const stack = await findStack().then((s) => { check.status = 200; return s }, () => undefined)
+    if (stack) return `Portainer created the stack, but its answer was lost: ${(e as Error).message}`
+    if (refused && stack === null) await onNone?.()
+    if (--left <= 0) throw e
+    await sleep(waitMs)
+  }
 }
 
 export class DeployFailure extends Error {
   status: number
   calls: ApiCall[]
-  constructor(status: number, message: string, calls: ApiCall[]) {
-    super(message)
+  constructor(status: number, message: string, calls: ApiCall[], cause?: unknown) {
+    super(message, { cause })
     this.status = status
     this.calls = calls
   }
@@ -91,7 +97,7 @@ export async function deploy(project: string, repo: string, deps: DeployDeps, co
       call.status = okStatus
       return out
     } catch (e) {
-      throw e instanceof HttpError ? new DeployFailure(e.status, e.message, calls) : new DeployFailure(502, (e as Error).message, calls)
+      throw e instanceof HttpError ? new DeployFailure(e.status, e.message, calls, e) : new DeployFailure(502, (e as Error).message, calls, e)
     }
   }
   const existing = await step('GET', '/containers/json', 200, deps.listContainers)
@@ -114,17 +120,17 @@ export async function deploy(project: string, repo: string, deps: DeployDeps, co
       throw e
     }
   }
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   let warning: string | undefined
   try {
     await step('POST', '/api/stacks/create/standalone/string', 200, () => deps.createStack(name))
   } catch (e) {
-    // the keys must not outlive a stack that was never created. A created stack's container clones with these keys, so they go only when Portainer confirms there is no stack.
+    // the keys must not outlive a stack that was never created. A created stack's container clones with these keys, so they go only when Portainer refused the create and confirms there is no stack.
     warning = await afterFailedCreate(e, calls, () => deps.findStack(name), async () => {
       if (key) await unkey(repo, key.id, deps.deleteDeployKey!)
       if (configKey) await unkey(configRepo, configKey.id, deps.deleteConfigKey!)
-    })
+    }, sleep)
   }
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   let id = ''
   for (let i = 0; i < 10 && !id; i++) {
     id = (await step('GET', '/containers/json', 200, deps.listContainers)).find((c) => c.name === name)?.id ?? ''

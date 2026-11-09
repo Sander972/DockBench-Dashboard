@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { afterAll, expect, test } from 'bun:test'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -21,6 +21,8 @@ globalThis.fetch = Object.assign((input: string | URL | Request, init?: BunFetch
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   return externalFake && /^https:\/\/api\.(github\.com|telegram\.org)\//.test(url) ? Promise.resolve(externalFake(input instanceof Request ? input : new Request(url, init))) : realFetch(input, init)
 }, realFetch)
+// bun test runs every server test file in one process, so the next files get the real fetch back
+afterAll(() => { globalThis.fetch = realFetch })
 // collector that has no sample yet (503) unless a test swaps in its own fake
 let collectorFake: ((req: Request) => Response | Promise<Response>) | null = null
 const collectorServer = Bun.serve({ port: 0, fetch: (req) => (collectorFake ? collectorFake(req) : new Response('no sample yet', { status: 503 })) })

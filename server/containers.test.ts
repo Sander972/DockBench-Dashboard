@@ -1,6 +1,9 @@
 import { expect, test } from 'bun:test'
 import { deviceCode, imageChecker, inspectCache, lastError, shared, statusTracker, ttlCache, updateAvailable, type DevContainerStatus } from './containers'
 
+// the entrypoint still runs: a silent /status never turns dead before it has answered once
+const setup = async () => true
+
 const st = { tunnel: 'connected', mise: {} } as unknown as DevContainerStatus
 
 test('device code and fatal line come from the newest log lines', () => {
@@ -15,7 +18,7 @@ test('device code and fatal line come from the newest log lines', () => {
 test('status is starting until the first answer, dead when it stops answering, starting again after a restart', async () => {
   let answer: () => Promise<DevContainerStatus> = () => Promise.reject(new Error('refused'))
   let calls = 0
-  const view = statusTracker(() => (calls++, answer()), 20, 0)
+  const view = statusTracker(() => (calls++, answer()), setup, 20, 0)
 
   expect((await view('a', 'x', 't1', true)).statusError).toBe('starting')
   answer = async () => st
@@ -39,7 +42,7 @@ test('status is starting until the first answer, dead when it stops answering, s
 
 test('/status is asked at most once per minMs, at once after a restart', async () => {
   let calls = 0
-  const view = statusTracker(async () => (calls++, st), 20, 60)
+  const view = statusTracker(async () => (calls++, st), setup, 20, 60)
   await view('a', 'x', 't1', true)
   await view('a', 'x', 't1', true)
   expect(calls).toBe(1)
@@ -48,7 +51,7 @@ test('/status is asked at most once per minMs, at once after a restart', async (
   expect(calls).toBe(2)
   // a restart asks at once, whatever the interval; a failure counts as a request too
   let fail = true
-  const flaky = statusTracker(() => (calls++, fail ? Promise.reject(new Error('refused')) : Promise.resolve(st)), 20, 60)
+  const flaky = statusTracker(() => (calls++, fail ? Promise.reject(new Error('refused')) : Promise.resolve(st)), setup, 20, 60)
   await flaky('b', 'y', 't1', true)
   fail = false
   expect((await flaky('b', 'y', 't1', true)).statusError).toBe('starting')
@@ -59,7 +62,7 @@ test('/status is asked at most once per minMs, at once after a restart', async (
 test('a slow /status is never asked twice at once', async () => {
   let calls = 0
   let release!: (s: DevContainerStatus) => void
-  const view = statusTracker(() => (calls++, new Promise((r) => (release = r))), 10, 0)
+  const view = statusTracker(() => (calls++, new Promise((r) => (release = r))), setup, 10, 0)
   expect((await view('a', 'x', 't', true)).statusError).toBe('starting')
   expect((await view('a', 'x', 't', true)).statusError).toBe('starting')
   expect(calls).toBe(1)
@@ -142,22 +145,28 @@ test('ttlCache shares one answer for the ttl and keeps no failure', async () => 
   expect(await get()).toBe(4)
 })
 
-test('after a dashboard restart, a long-running container whose status server fails twice is dead, a young one starting', async () => {
-  const view = statusTracker(() => Promise.reject(new Error('refused')), 20, 0, 60_000)
-  const long = new Date(Date.now() - 120_000).toISOString()
-  const young = new Date(Date.now() - 1_000).toISOString()
-  expect((await view('a', 'x', long, true)).statusError).toBe('starting')
-  expect((await view('a', 'x', long, true)).statusError).toBe('dead')
-  expect((await view('b', 'y', young, true)).statusError).toBe('starting')
-  // a restart under the same id is young again
-  expect((await view('a', 'x', young, true)).statusError).toBe('starting')
+test('a container that never answered is dead after two failed requests once its entrypoint no longer runs, starting while it does, however long', async () => {
+  const running = new Set(['b'])
+  const asked: [string, string | null][] = []
+  const view = statusTracker(() => Promise.reject(new Error('refused')), async (id, entrypoint) => (asked.push([id, entrypoint]), running.has(id)), 20, 0)
+  const longAgo = new Date(Date.now() - 3 * 3600_000).toISOString()
+  // a: up for hours after a dashboard restart, its status server dead
+  expect((await view('a', 'x', longAgo, true, '/opt/dockbench/entrypoint.sh')).statusError).toBe('starting')
+  expect((await view('a', 'x', longAgo, true, '/opt/dockbench/entrypoint.sh')).statusError).toBe('dead')
+  // b: a setup.sh that has run for hours is still starting
+  for (let i = 0; i < 3; i++) expect((await view('b', 'y', longAgo, true, '/opt/dockbench/entrypoint.sh')).statusError).toBe('starting')
+  // once its entrypoint has exec'd into the tunnel and /status still fails, dead
+  running.delete('b')
+  expect((await view('b', 'y', longAgo, true, '/opt/dockbench/entrypoint.sh')).statusError).toBe('dead')
+  expect(asked[0]).toEqual(['a', '/opt/dockbench/entrypoint.sh'])
+  // a restart under the same id is starting again
+  running.add('a')
+  const now = new Date().toISOString()
+  expect((await view('a', 'x', now, true, '/opt/dockbench/entrypoint.sh')).statusError).toBe('starting')
+  expect((await view('a', 'x', now, true, '/opt/dockbench/entrypoint.sh')).statusError).toBe('starting')
 })
 
-test('a container first seen young whose status server never answers turns dead once it is past the grace', async () => {
-  const view = statusTracker(() => Promise.reject(new Error('refused')), 20, 0, 50)
-  const started = new Date().toISOString()
-  expect((await view('a', 'x', started, true)).statusError).toBe('starting')
-  expect((await view('a', 'x', started, true)).statusError).toBe('starting')
-  await Bun.sleep(80)
-  expect((await view('a', 'x', started, true)).statusError).toBe('dead')
+test('a failed entrypoint check reads as still setting up', async () => {
+  const view = statusTracker(() => Promise.reject(new Error('refused')), () => Promise.reject(new Error('Docker top returned 500')), 20, 0)
+  for (let i = 0; i < 3; i++) expect((await view('a', 'x', 't1', true, '/opt/dockbench/entrypoint.sh')).statusError).toBe('starting')
 })

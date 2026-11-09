@@ -51,31 +51,32 @@ interface Track {
   inflight: Promise<void> | null
   /** performance.now() when the last request settled; 0 asks at once */
   settled: number
+  // the container's entrypoint script no longer runs, so its status server was started
+  setupDone: boolean
 }
 
-// the status server starts after the Claude Code install or update, the clone and mise install, which take minutes on a first start
-const START_GRACE_MS = 15 * 60_000
-
-// One /status request per container at a time, whatever the number of tabs polling, and none sooner than minMs after the last one settled: the 2 s live tick would otherwise ask every container on every tick for facts (branch, dirty count, tunnel) that change over seconds. A poll waits up to waitMs for the answer, otherwise it reports what is known and the request carries on for the next poll. "starting" until /status answers once since the container (re)started (a restart asks at once), "dead" when it answered before and fails now, or when it never answered and its last two requests failed on a container up longer than graceMs, checked on every view (a status server that never comes up, or one that died before a dashboard restart: the tracker is in memory; one timeout while the restarted dashboard asks every container at once is not enough).
-export function statusTracker(fetchStatus: (name: string) => Promise<DevContainerStatus>, waitMs = 2000, minMs = 5000, graceMs = START_GRACE_MS) {
+// One /status request per container at a time, whatever the number of tabs polling, and none sooner than minMs after the last one settled: the 2 s live tick would otherwise ask every container on every tick for facts (branch, dirty count, tunnel) that change over seconds. A poll waits up to waitMs for the answer, otherwise it reports what is known and the request carries on for the next poll. "starting" until /status answers once since the container (re)started (a restart asks at once), "dead" when it answered before and fails now, or when it never answered, its last two requests failed and inSetup says the entrypoint script no longer runs (a status server that never came up, or one that died before a dashboard restart: the tracker is in memory; one timeout while the restarted dashboard asks every container at once is not enough). The image starts the status server only after the clone, mise install and setup.sh, which have no time limit, so how long the container has been up says nothing; a failed inSetup reads as still setting up.
+export function statusTracker(fetchStatus: (name: string) => Promise<DevContainerStatus>, inSetup: (id: string, entrypoint: string | null) => Promise<boolean>, waitMs = 2000, minMs = 5000) {
   const tracks = new Map<string, Track>()
-  return async function view(id: string, name: string, startedAt: string | null, running: boolean): Promise<StatusView> {
+  return async function view(id: string, name: string, startedAt: string | null, running: boolean, entrypoint: string | null = null): Promise<StatusView> {
     let t = tracks.get(id)
-    if (t && running && t.startedAt !== startedAt) t = { ...t, startedAt, fails: 0, answered: false, inflight: null, settled: 0 }
-    if (!t) t = { startedAt, fails: 0, status: null, fetchedAt: null, answered: false, inflight: null, settled: 0 }
+    if (t && running && t.startedAt !== startedAt) t = { ...t, startedAt, fails: 0, answered: false, inflight: null, settled: 0, setupDone: false }
+    if (!t) t = { startedAt, fails: 0, status: null, fetchedAt: null, answered: false, inflight: null, settled: 0, setupDone: false }
     tracks.set(id, t)
     const track = t
     if (running) {
       if (!track.inflight && (track.settled === 0 || performance.now() - track.settled >= minMs)) {
         track.inflight = fetchStatus(name).then(
           (s) => { track.status = s; track.fetchedAt = new Date().toISOString(); track.answered = true; track.fails = 0 },
-          () => { track.fails++ },
+          async () => {
+            track.fails++
+            if (!track.answered && !track.setupDone && track.fails >= 2) track.setupDone = !(await inSetup(id, entrypoint).catch(() => true))
+          },
         ).finally(() => { track.inflight = null; track.settled = performance.now() })
       }
       if (track.inflight) await Promise.race([track.inflight, Bun.sleep(waitMs)])
     }
-    const pastGrace = !!track.startedAt && Date.now() - Date.parse(track.startedAt) > graceMs
-    const statusError = !running ? null : track.answered ? (track.fails > 0 ? 'dead' : null) : pastGrace && track.fails >= 2 ? 'dead' : 'starting'
+    const statusError = !running ? null : track.answered ? (track.fails > 0 ? 'dead' : null) : track.setupDone ? 'dead' : 'starting'
     return { status: track.status, statusError, statusFetchedAt: track.fetchedAt }
   }
 }

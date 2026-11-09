@@ -21,8 +21,8 @@ export interface DeployRun { name: string; calls: ApiCall[]; id: string | null; 
 export interface Draft extends DeployDraft { run: DeployRun | null }
 
 export type TgOp = 'deploy' | 'claim' | 'update'
-// loadError: GET /api/telegram is failing (the page says so instead of judging the last answer), cleared by the next answer; receivedAt: browser time the last answer arrived
-const newTg = () => ({ token: '', gid: '', busy: null as TgOp | null, calls: [] as ApiCall[], error: '', claim: null as TelegramClaim | null, loadError: '', receivedAt: 0 })
+// loadError: GET /api/telegram is failing (the page says so instead of judging the last answer), cleared by the next answer; askedAt: browser time the oldest unanswered GET /api/telegram was sent, 0 while none is pending
+const newTg = () => ({ token: '', gid: '', busy: null as TgOp | null, calls: [] as ApiCall[], error: '', claim: null as TelegramClaim | null, loadError: '', askedAt: 0 })
 
 // the Updates panel in Settings: the running action, its trace, and the wait for the dashboard to come back after updating itself
 export type SysOp = 'check' | 'dashboard' | 'telegram'
@@ -281,7 +281,7 @@ function setHost(host: HostUsage) {
 const asleep = () => document.hidden && !notifyOn()
 
 let liveConn: Live | null = null
-// host.polledAt (server clock) of the last forced poll: every ticker snapshot built before it is dropped until one built after it arrives and clears it; a reconnect clears it too, so a server clock stepping back drops the feed at most until the watchdog reopens it. snapAt: host.polledAt of the last snapshot merged while a poll runs, so a poll's container list that a newer snapshot overtook is not merged over it
+// host.polledAt (server clock) of the last forced poll: every ticker snapshot built before it is dropped until one built after it arrives and clears it. A dropped snapshot still shows the feed works (live 'on'), so after the browser's own reconnect, which does not come through connectLive, the stale cached snapshot the server sends first does not leave the feed 'connecting'; a server clock stepping back drops every snapshot without moving lastPollAt, so the watchdog reopens the feed through connectLive, which clears forcedAt. snapAt: host.polledAt of the last snapshot merged while a poll runs, so a poll's container list that a newer snapshot overtook is not merged over it
 let forcedAt = 0, snapAt = 0
 // opens the feed; snapshots go through the same merge as a poll. closed = the server refused the reconnect: a 401 signs out, anything else (the server restarting behind the proxy) leaves the feed off and the next timer tick reconnects, never checkSession(), whose afterSignIn would reconnect at once in a loop and reset the deploy draft
 export function connectLive() {
@@ -289,7 +289,7 @@ export function connectLive() {
   store.live = 'connecting'
   forcedAt = 0
   liveConn = openLive({
-    snapshot: ({ host, containers }) => { if (staleSnapshot(host.polledAt, forcedAt)) return; forcedAt = 0; snapAt = Date.parse(host.polledAt); setHost(host); merge(containers); store.loading = false; store.live = 'on' },
+    snapshot: ({ host, containers }) => { if (staleSnapshot(host.polledAt, forcedAt)) { store.live = 'on'; return } forcedAt = 0; snapAt = Date.parse(host.polledAt); setHost(host); merge(containers); store.loading = false; store.live = 'on' },
     down: error => { store.dockerDown = true; store.downError = error; store.lastPollAt = Date.now(); store.loading = false; store.live = 'on' },
     connecting: () => { store.live = 'connecting' },
     signedOut: () => expire(),
@@ -842,18 +842,20 @@ export function resetDeploy() {
 /* ---------- Telegram bot ---------- */
 
 export async function loadTelegram() {
+  if (!store.tg.askedAt) store.tg.askedAt = Date.now()
   try {
     const t = await api.getTelegram()
     // a restarted bot no longer knows the claim code it handed out
     if (store.telegram && store.telegram.startedAt !== t.startedAt) store.tg.claim = null
     store.telegram = t
-    store.tg.receivedAt = Date.now()
     store.tg.loadError = ''
   } catch (e) {
     if (e instanceof SignedOut) return expire()
     // toast once per failure streak, not on every poll
     if (!store.tg.loadError) fail(e)
     store.tg.loadError = errText(e)
+  } finally {
+    store.tg.askedAt = 0
   }
 }
 

@@ -30,7 +30,11 @@ describe('botRows', () => {
     expect(botRows(t({ now: '2026-10-14T10:05:00Z' }, { last_poll_at: '2026-10-14T10:04:50Z' }), NOW - 5 * 60_000)[0].ok).toBe(true)
     expect(botRows(t({ now: '2026-10-14T10:05:00Z' }), NOW)[0].ok).toBe(false)
   })
-  it('ages the last poll by the time since the answer arrived, and says status unavailable once no answer came for 90 s', () => {
+  it('judges an answer from an earlier visit as it was while no request is pending or the reload is young', () => {
+    expect(botRows(t(), NOW + 120_000)[0].ok).toBe(true)
+    expect(botRows(t(), NOW + 120_000, '', NOW + 119_000)[0].ok).toBe(true)
+  })
+  it('ages the last poll by the time the pending request has waited, and says status unavailable once it waited 90 s', () => {
     const late = botRows(t(), NOW + 85_000, '', NOW)[0]
     expect(late.ok).toBe(false)
     expect(late.text).toContain('Not reaching Telegram')

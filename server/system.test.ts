@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { BOOT_ID, imageRow } from './system'
 import type { Inspect } from './docker'
 
-const x: Inspect = { startedAt: '2026-10-14T10:00:00Z', finishedAt: null, exitCode: null, restartCount: 0, memLimit: 0, repoUrl: null, homeVolume: null, image: 'ghcr.io/sander972/dockbench-dashboard:latest', imageId: 'sha256:old', project: 'dashboard', config: { installClaude: true, injectClaudeConfig: false, vscodeConfig: true } }
+const x: Inspect = { startedAt: '2026-10-14T10:00:00Z', finishedAt: null, exitCode: null, restartCount: 0, memLimit: 0, repoUrl: null, homeVolume: null, image: 'ghcr.io/sander972/dockbench-dashboard:latest', imageId: 'sha256:old', project: 'dashboard', config: { installClaude: true, injectClaudeConfig: false, vscodeConfig: true }, entrypoint: null }
 const c = { id: 'abc', name: 'dockbench-dashboard', state: 'running', image: x.image }
 
 test('imageRow: not deployed when there is no container', () => {

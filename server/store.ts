@@ -38,26 +38,48 @@ export async function writeAccount(dataDir: string, account: Account): Promise<v
   await Bun.write(`${dataDir}/github.json`, JSON.stringify(account))
 }
 
-// the unauthenticated OAuth callback writes events too, so the log is capped: past maxBytes it moves to activity.jsonl.1 (replacing the previous one) and starts again. Writes run one at a time, or two appends crossing the cap together would both rotate and the second would move a one-line file over the rotated one. The next write waits at most stallMs for the one before, so a stalled disk hangs only the request whose write stalled, not every later one.
-let appends: Promise<unknown> = Promise.resolve()
+// Activity log operations run one at a time: two appends crossing the cap together would both rotate and the second would move a one-line file over the rotated one, and a read between a rotation's two files would see the same lines twice. The next operation waits at most stallMs from when this one started, so a stalled disk hangs only the request whose operation stalled, not every later one.
+let activityQueue: Promise<unknown> = Promise.resolve()
+function queued<T>(op: () => Promise<T>, stallMs: number): Promise<T> {
+  const prev = activityQueue
+  const run = prev.then(op)
+  activityQueue = prev.then(() => Promise.race([run, Bun.sleep(stallMs)])).catch(() => {})
+  return run
+}
+
+// the unauthenticated OAuth callback writes events too, so the log is capped: past maxBytes it moves to activity.jsonl.1 (replacing the previous one) and starts again
 export function appendEvent(dataDir: string, event: ActivityEvent, maxBytes = 5 * 1024 * 1024, stallMs = 5000): Promise<void> {
-  const run = appends.then(async () => {
+  return queued(async () => {
     await mkdir(dataDir, { recursive: true })
     const path = `${dataDir}/activity.jsonl`
     const line = JSON.stringify(event) + '\n'
     if ((await stat(path).then((s) => s.size, () => 0)) + Buffer.byteLength(line) > maxBytes) await rename(path, `${path}.1`).catch(() => {})
     await appendFile(path, line)
-  })
-  appends = Promise.race([run, Bun.sleep(stallMs)]).catch(() => {})
-  return run
+  }, stallMs)
 }
 
-// newest first; when the newest file holds fewer than limit events (right after a rotation) the rotated one tops it up, so at most 10 MB per request
-export async function readEvents(dataDir: string, limit = 200): Promise<ActivityEvent[]> {
-  const read = async (path: string) => { const f = Bun.file(path); return (await f.exists()) ? (await f.text()).split('\n').filter(Boolean) : [] }
-  let lines = await read(`${dataDir}/activity.jsonl`)
-  if (lines.length < limit) lines = [...(await read(`${dataDir}/activity.jsonl.1`)), ...lines]
-  return lines.slice(-limit).reverse().map((l) => JSON.parse(l) as ActivityEvent)
+// the last n lines of a file, read backwards in 64 KB chunks until more than n line ends are in, so a large file (a log from before the cap) costs only its tail; decoded once at the end, so a chunk edge never splits a character of a kept line
+async function tailLines(path: string, n: number): Promise<string[]> {
+  const f = Bun.file(path)
+  if (n <= 0 || !(await f.exists())) return []
+  const chunks: Uint8Array[] = []
+  let end = f.size, ends = 0
+  while (end > 0 && ends <= n) {
+    const start = Math.max(0, end - 64 * 1024)
+    const chunk = new Uint8Array(await f.slice(start, end).arrayBuffer())
+    chunks.unshift(chunk)
+    for (const b of chunk) if (b === 10) ends++
+    end = start
+  }
+  return Buffer.concat(chunks).toString('utf8').split('\n').filter(Boolean).slice(-n)
+}
+
+// newest first; when the newest file holds fewer than limit events (right after a rotation) the rotated one tops it up
+export function readEvents(dataDir: string, limit = 200, stallMs = 5000): Promise<ActivityEvent[]> {
+  return queued(async () => {
+    const lines = await tailLines(`${dataDir}/activity.jsonl`, limit)
+    return [...(await tailLines(`${dataDir}/activity.jsonl.1`, limit - lines.length)), ...lines].reverse().map((l) => JSON.parse(l) as ActivityEvent)
+  }, stallMs)
 }
 
 // Settings in src/types.ts. /data/settings.json: dashboard-wide defaults that are not secrets. A missing or corrupt file reads as the defaults.

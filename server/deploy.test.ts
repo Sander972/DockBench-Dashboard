@@ -40,6 +40,8 @@ test('validateDeploy rejects bad input with a reason', () => {
 })
 
 const row = (name: string): ContainerRow => ({ id: 'abc123', name, state: 'running', image: IMG })
+// what createStack throws when Portainer itself refuses the create
+const refused = () => Object.assign(new Error('Portainer create stack returned 500: boom'), { status: 500 })
 
 function fakes(over: Partial<DeployDeps> = {}) {
   const log: string[] = []
@@ -87,7 +89,7 @@ test('deploy pulls, creates the stack and finds the container on a later poll', 
 })
 
 test('without a deploy key (ghLogin), deploy creates no key and a failed stack has none to delete', async () => {
-  const { deps, log } = fakes({ createDeployKey: undefined, deleteDeployKey: undefined, createStack: async () => { throw new Error('Portainer create stack returned 500: boom') } })
+  const { deps, log } = fakes({ createDeployKey: undefined, deleteDeployKey: undefined, createStack: async () => { throw refused() } })
   await expect(deploy('shop', 'octocat/shop', deps)).rejects.toMatchObject({ message: 'Portainer create stack returned 500: boom' })
   expect(log).toEqual(['pull'])
 })
@@ -105,7 +107,7 @@ test('a refused deploy key is a 502 and no stack is created', async () => {
 })
 
 test('stack failure deletes the key and keeps the Portainer error', async () => {
-  const { deps, log } = fakes({ createStack: async () => { throw new Error('Portainer create stack returned 500: boom') } })
+  const { deps, log } = fakes({ createStack: async () => { throw refused() } })
   const err = await deploy('shop', 'octocat/shop', deps).catch((e) => e)
   expect(err).toMatchObject({ status: 502, message: 'Portainer create stack returned 500: boom' })
   expect(log).toEqual(['pull', 'key', 'unkey 42'])
@@ -126,11 +128,34 @@ test('a stack create whose response failed but that Portainer did create keeps t
   expect(log).toEqual(['pull', 'key'])
 })
 
+test('a create answer a gateway lost is looked up again until Portainer saves the stack, keeping the keys', async () => {
+  let checks = 0
+  const slept: number[] = []
+  const { deps, log } = fakes({
+    findStack: async () => (++checks >= 4 ? { Id: 7 } : null),
+    createStack: async () => { throw Object.assign(new Error('Portainer create stack returned 504: gateway timeout'), { status: 504 }) },
+    listContainers: async () => (checks >= 4 ? [row('dockbench-shop')] : []),
+    sleep: async (ms) => { slept.push(ms) },
+  })
+  const r = await deploy('shop', 'octocat/shop', deps)
+  expect(r.warning).toBe('Portainer created the stack, but its answer was lost: Portainer create stack returned 504: gateway timeout')
+  expect(log).toEqual(['pull', 'key'])
+  expect(slept).toEqual([5000, 5000])
+})
+
+test('a create answer lost for good fails the deploy but keeps the keys, since Portainer may still save the stack', async () => {
+  const { deps, log } = fakes({ createStack: async () => { throw new Error('fetch failed') } })
+  const err = await deploy('shop', 'octocat/shop', deps).catch((e) => e)
+  expect(err).toMatchObject({ status: 502, message: 'fetch failed' })
+  expect(log).toEqual(['pull', 'key'])
+  expect(err.calls.filter((c: { method: string; path: string }) => c.method === 'GET' && c.path === '/api/stacks').length).toBe(7) // the 409 check, then six lookups
+})
+
 test('when Portainer cannot say whether the stack exists, the key is kept', async () => {
   let checks = 0
   const { deps, log } = fakes({
     findStack: async () => { if (++checks > 1) throw new Error('Portainer down'); return null },
-    createStack: async () => { throw new Error('Portainer create stack returned 500: boom') },
+    createStack: async () => { throw refused() },
   })
   const err = await deploy('shop', 'octocat/shop', deps).catch((e) => e)
   expect(err.message).toBe('Portainer create stack returned 500: boom')
@@ -139,7 +164,7 @@ test('when Portainer cannot say whether the stack exists, the key is kept', asyn
 })
 
 test('a failed key deletion does not hide the stack error', async () => {
-  const { deps } = fakes({ createStack: async () => { throw new Error('Portainer create stack returned 500: boom') }, deleteDeployKey: async () => { throw new Error('GitHub down') } })
+  const { deps } = fakes({ createStack: async () => { throw refused() }, deleteDeployKey: async () => { throw new Error('GitHub down') } })
   const err = await deploy('shop', 'octocat/shop', deps).catch((e) => e)
   expect(err.message).toBe('Portainer create stack returned 500: boom')
   expect(err.calls.at(-1)).toEqual({ method: 'DELETE', path: '/repos/octocat/shop/keys/42', status: null })
@@ -164,7 +189,7 @@ test('stack failure deletes both keys when there is a config repo', async () => 
   const { deps, log } = fakes({
     createConfigKey: async () => { log.push('config key'); return { id: 43 } },
     deleteConfigKey: async (id) => { log.push(`unconfig ${id}`) },
-    createStack: async () => { throw new Error('Portainer create stack returned 500: boom') },
+    createStack: async () => { throw refused() },
   })
   await expect(deploy('shop', 'octocat/shop', deps, 'octocat/claude-config')).rejects.toMatchObject({ message: 'Portainer create stack returned 500: boom' })
   expect(log).toEqual(['pull', 'key', 'config key', 'unkey 42', 'unconfig 43'])

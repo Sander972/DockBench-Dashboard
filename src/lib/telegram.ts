@@ -6,17 +6,17 @@ export interface BotRow { key: 'run' | 'owner' | 'group' | 'topics'; ok: boolean
 // getUpdates long-polls for 30 s, so a successful poll is never older than about that while the bot works
 const STALE_MS = 90_000
 
-// The setup checklist on the Telegram page, top to bottom; each row is green once /status says that step is done. now is the browser clock and receivedAt the browser time the answer arrived: the bot's last poll is aged on the answer's server clock (the bot shares the server's host clock) moved on by the time since, so a skewed browser clock does not matter and the age keeps growing while no answer comes. error: GET /api/telegram is failing, or has not answered for STALE_MS (a hung request never fails), so t is the last answer and its age says nothing about the bot.
-export function botRows(t: TelegramStatus, now: number, error = '', receivedAt = now): BotRow[] {
-  if (!error && now - receivedAt > STALE_MS) error = 'no answer for over 90 seconds'
+// The setup checklist on the Telegram page, top to bottom; each row is green once /status says that step is done. now is the browser clock and askedAt the browser time the pending GET /api/telegram was sent (0 when none is pending): the bot's last poll is aged on the answer's server clock (the bot shares the server's host clock), so a skewed browser clock does not matter, moved on by the time the pending request has waited, so the age keeps growing while a request hangs (it never fails) but an answer from an earlier visit is judged as it was until the reload answers. error: GET /api/telegram is failing, or the pending one has waited STALE_MS, so t is the last answer and its age says nothing about the bot.
+export function botRows(t: TelegramStatus, now: number, error = '', askedAt = 0): BotRow[] {
+  const waited = askedAt ? Math.max(0, now - askedAt) : 0
+  if (!error && waited > STALE_MS) error = 'no answer for over 90 seconds'
   const s = t.status
-  const fresh = !!s?.last_poll_at && (Date.parse(t.now) || receivedAt) + (now - receivedAt) - Date.parse(s.last_poll_at) < STALE_MS
-  const lost = !error && t.state === 'running' && t.statusError !== 'starting' && !!s && !fresh
+  const fresh = !!s?.last_poll_at && (Date.parse(t.now) || now - waited) + waited - Date.parse(s.last_poll_at) < STALE_MS
   const run = error ? `Status unavailable: ${error}`
     : t.state !== 'running' ? `The container is ${t.state}.`
     : t.statusError === 'starting' ? 'Starting, waiting for /status.'
     : !s ? '/status does not answer. Check the container log in Portainer.'
-    : lost ? 'Not reaching Telegram: the token was revoked or Telegram is unreachable. Check the container log in Portainer.'
+    : !fresh ? 'Not reaching Telegram: the token was revoked or Telegram is unreachable. Check the container log in Portainer.'
     : `Running as @${s.bot}.`
   const ok = !error && t.state === 'running' && !!s && fresh
   const wait = !!error || (t.state === 'running' && t.statusError === 'starting')

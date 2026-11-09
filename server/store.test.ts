@@ -59,3 +59,25 @@ test('appends that cross the cap at the same time rotate once each in order, los
   expect(await targets('activity.jsonl.1')).toEqual(['p3', 'p4'])
   expect(await targets('activity.jsonl')).toEqual(['p5'])
 })
+
+test('a read asked while an append rotates waits for it, so no line comes back twice', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dockbench-activity-'))
+  const ev = (target: string) => ({ at: 't', actor: 'octocat', what: 'Deployed', target, ok: true, calls: [] })
+  const size = JSON.stringify(ev('p1')).length + 1
+  await appendEvent(dir, ev('p1'), size * 2)
+  await appendEvent(dir, ev('p2'), size * 2)
+  const [, events] = await Promise.all([appendEvent(dir, ev('p3'), size * 2), readEvents(dir)])
+  expect(events.map((e) => e.target)).toEqual(['p3', 'p2', 'p1'])
+})
+
+test('readEvents reads only the tail of a large rotated log, keeping multi-byte text whole', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dockbench-activity-'))
+  const ev = (target: string) => JSON.stringify({ at: 't', actor: 'octocat', what: 'Déployé ✓', target, ok: true, calls: [] })
+  // about 300 KB, several 64 KB chunks
+  await Bun.write(join(dir, 'activity.jsonl.1'), Array.from({ length: 3000 }, (_, i) => ev(`old${i}`)).join('\n') + '\n')
+  await Bun.write(join(dir, 'activity.jsonl'), ev('new') + '\n')
+  const events = await readEvents(dir, 4)
+  expect(events.map((e) => e.target)).toEqual(['new', 'old2999', 'old2998', 'old2997'])
+  expect(events.every((e) => e.what === 'Déployé ✓')).toBe(true)
+  expect((await readEvents(dir, 5000)).length).toBe(3001)
+})

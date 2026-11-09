@@ -8,7 +8,7 @@ import { authorizeUrl, createDeployKey, deleteDeployKey, exchangeCode, findDeplo
 import { appendEvent, LIMIT_RANGES, readAccount, readEvents, readSettings, writeAccount, writeSettings, type Account, type ActivityEvent, type ApiCall, type Settings } from './store'
 import { createSessionRecord, enforceLimit, findAlive, listSessions, parseCookie, revoke, revokeAll, signCookie, touch, type SessionLimits } from './sessions'
 import { createLive } from './live'
-import { containerByName, containerLogs, containerPost, dockerInfo, execRun, imageInspect, inspectContainer, listDockbench, removeContainer, removeVolume, stackVolumes, systemDf, unlessGone } from './docker'
+import { containerByName, containerLogs, containerPost, dockerInfo, execRun, imageInspect, inspectContainer, listDockbench, removeContainer, removeVolume, runsEntrypoint, stackVolumes, systemDf, unlessGone } from './docker'
 import { diskUsage } from './host'
 import { createCollector, history as collectorHistory, WINDOWS, type Window } from './collector'
 import { cpusetFor, createStack, deleteStack, findStack, fromStackFile, patchEnv, pullImage, putStack, readStack, redeployStack, STACK_FILE, stackEnv, TELEGRAM_STACK_FILE, vscodeEnv } from './portainer'
@@ -142,7 +142,7 @@ const inspects = inspectCache((id) => inspectContainer(env.dockerHost, id))
 export const info = ttlCache(5 * 60_000, () => dockerInfo(env.dockerHost))
 // host, container and process usage from the collector container; one /metrics answer per live interval serves both views of a tick
 const collector = createCollector(env.collectorUrl, 2000)
-const statusView = statusTracker((name) => fetchStatus(`http://${name}:8080/status`))
+const statusView = statusTracker((name) => fetchStatus(`http://${name}:8080/status`), async (id, entrypoint) => (entrypoint ? runsEntrypoint(env.dockerHost, id, entrypoint) : true))
 const botStatusUrl = `http://${TELEGRAM_NAME}:8080/status`
 // ghcr.io refuses the GitHub OAuth token, so a digest lookup cannot authenticate; pulling through Portainer uses the PAT stored under its Registries, then the tag's local image id is the answer. ponytail: the 30-minute refresh downloads a new image in the background, a registry-side digest lookup if disk or bandwidth matter.
 const images = imageChecker(async (ref) => {
@@ -319,7 +319,7 @@ async function containersView() {
     if (!x) return null
     const running = r.state === 'running'
     const s = running ? snap?.containers.find((c) => c.id === r.id) : undefined
-    const sv = await statusView(r.id, r.name, x.startedAt, running)
+    const sv = await statusView(r.id, r.name, x.startedAt, running, x.entrypoint)
     // the log is read only while it says something /status cannot: a device code before the first answer or while the tunnel waits for approval, the fatal line of a restart loop
     const needLog = r.state === 'restarting' || (running && (sv.statusError === 'starting' || sv.status?.tunnel === 'waiting_for_login'))
     const log = needLog ? await containerLogs(env.dockerHost, r.id, 100).catch(() => []) : []

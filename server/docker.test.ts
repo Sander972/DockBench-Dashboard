@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { demux, dockerInfo, execRun, inspectContainer, logLines, splitImage } from './docker'
+import { demux, DOCKER_TIMEOUT, dockerInfo, execRun, inspectContainer, logLines, runsEntrypoint, splitImage } from './docker'
 
 const frame = (stream: number, s: string) => {
   const p = Buffer.from(s)
@@ -81,10 +81,40 @@ test('dockerInfo gives up on a daemon that never answers', async () => {
   }
 })
 
+test('every Docker call without its own signal gives up on a daemon that never answers', async () => {
+  const hung = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) })
+  const was = DOCKER_TIMEOUT.ms
+  DOCKER_TIMEOUT.ms = 100
+  try {
+    expect(await inspectContainer(`http://localhost:${hung.port}`, 'abc').then(() => 'answered', (e: Error) => e.name)).toBe('TimeoutError')
+  } finally {
+    DOCKER_TIMEOUT.ms = was
+    hung.stop(true)
+  }
+})
+
 test('inspect maps Docker zero start time of a never started container to null', async () => {
   const fake = Bun.serve({ port: 0, fetch: () => Response.json({ Image: 'sha256:a', State: { Status: 'created', StartedAt: '0001-01-01T00:00:00Z', FinishedAt: '0001-01-01T00:00:00Z', ExitCode: 0 }, RestartCount: 0, HostConfig: { Memory: 0 }, Config: { Env: [], Image: 'x' } }) })
   try {
     expect((await inspectContainer(`http://localhost:${fake.port}`, 'c1')).startedAt).toBeNull()
+  } finally {
+    fake.stop(true)
+  }
+})
+
+test('runsEntrypoint finds the entrypoint script among the processes, skipping docker-init', async () => {
+  const EP = '/opt/dockbench/entrypoint.sh'
+  const row = (pid: string, ppid: string, cmd: string) => ['1000', pid, ppid, '0', '10:00', '?', '00:00:00', cmd]
+  let procs: string[][] = []
+  const fake = Bun.serve({ port: 0, fetch: () => Response.json({ Titles: ['UID', 'PID', 'PPID', 'C', 'STIME', 'TTY', 'TIME', 'CMD'], Processes: procs }) })
+  const host = `http://localhost:${fake.port}`
+  try {
+    // during setup.sh: init, the entrypoint shell, its child
+    procs = [row('100', '90', `/sbin/docker-init -- ${EP}`), row('101', '100', `/bin/bash ${EP}`), row('150', '101', 'bash .devcontainer/setup.sh')]
+    expect(await runsEntrypoint(host, 'abc', EP)).toBe(true)
+    // after exec: the shell became code tunnel, only docker-init still names the script
+    procs = [row('100', '90', `/sbin/docker-init -- ${EP}`), row('101', '100', 'code tunnel --accept-server-license-terms --name shop'), row('120', '101', '/usr/local/bin/dockbench-agent')]
+    expect(await runsEntrypoint(host, 'abc', EP)).toBe(false)
   } finally {
     fake.stop(true)
   }
