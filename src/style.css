@@ -307,7 +307,7 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 .ax-h{left:50%;transform:translateX(-50%);white-space:nowrap;color:var(--fg-2)}
 @container (max-width:479.98px){.ax-h{left:auto;right:0;transform:none}} /* beside the max label instead of over it */
 
-/* paired sections side by side once the detail column has the room (Git | CI, Environment | Container) */
+/* paired sections side by side once the detail column has the room (Git | CI) */
 .duo{display:grid;min-width:0}
 .duo > .sec{align-content:start}
 .duo > .sec + .sec{border-top:1px solid var(--line-2)}
@@ -343,6 +343,12 @@ a.src-note:hover{color:var(--fg)}
 .fold-b{display:grid;gap:12px;padding:4px 0 8px}
 .fold.danger .fold-t{color:var(--bad-ink)}
 .term.log{max-height:240px}
+/* switch: a checkbox drawn as a sliding toggle (log auto-refresh) */
+.tgl{display:inline-flex;align-items:center;gap:10px;min-height:44px;font-size:.875rem;cursor:pointer}
+.tgl input{appearance:none;-webkit-appearance:none;flex:none;position:relative;width:36px;height:20px;margin:0;border-radius:10px;border:1px solid var(--line);background:var(--seg-off);cursor:pointer;transition:background .12s}
+.tgl input::before{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--fg-2);transition:transform .12s cubic-bezier(.22,1,.36,1)}
+.tgl input:checked{background:var(--accent);border-color:color-mix(in oklab,var(--accent) 65%,var(--fg))}
+.tgl input:checked::before{transform:translateX(16px);background:var(--on-accent)}
 
 dl.facts{display:grid;grid-template-columns:minmax(6.5rem,auto) minmax(0,1fr);gap:8px 14px;margin:0;font-size:.875rem}
 dl.facts dt{color:var(--fg-2);font-size:.8125rem}
@@ -503,7 +509,7 @@ fieldset.set + fieldset.set{border-top:1px solid var(--line-2)}
   .led.blink,.sk,.poll .led.flash{animation:none}
   .otp,.otp .otp-cell,.otp-cell::before,.otp-cell::after,.dig-enter-active,.dig-leave-active{animation:none!important;transition:none}
   .toast{transition:opacity .15s linear}
-  .btn{transition:none}
+  .btn,.tgl input,.tgl input::before{transition:none}
 }
 
 /* ---------- actions ---------- */

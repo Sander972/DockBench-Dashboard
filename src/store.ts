@@ -368,7 +368,7 @@ export async function loadActivity() {
 }
 
 export async function loadLogs(id: string) {
-  try { store.logs[id] = await api.getLogs(id) } catch (e) { fail(e) }
+  try { store.logs[id] = await api.getLogs(id); return true } catch (e) { fail(e); return false }
 }
 
 export async function refreshLogs(id: string) {
