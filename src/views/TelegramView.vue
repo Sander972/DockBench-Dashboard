@@ -9,7 +9,7 @@ import StepUpPanel from '../components/StepUpPanel.vue'
 
 const now = useNow()
 const t = computed(() => store.telegram)
-const rows = computed(() => (t.value?.deployed ? botRows(t.value, now.value) : []))
+const rows = computed(() => (t.value?.deployed ? botRows(t.value, now.value, store.tg.loadError) : []))
 const bot = computed(() => t.value?.status?.bot ?? '')
 const cf = computed(() => (store.confirm?.target.startsWith('telegram-') ? store.confirm : null))
 const COPY = {
@@ -21,17 +21,19 @@ const COPY = {
 const codeCls = (n: number | null) => (n == null ? (store.tg.error ? 'code-bad' : 'code-wait') : n < 300 ? 'code-ok' : 'code-bad')
 
 let timer: ReturnType<typeof setInterval> | undefined
-const start = () => { clearInterval(timer); timer = setInterval(loadTelegram, prefs.poll * 1000) }
-onMounted(() => { loadTelegram(); start() })
+// a hidden tab skips the ticks; back in front it loads at once
+const start = () => { clearInterval(timer); timer = setInterval(() => { if (!document.hidden) loadTelegram() }, prefs.poll * 1000) }
+const onVisible = () => { if (!document.hidden) loadTelegram() }
+onMounted(() => { loadTelegram(); start(); document.addEventListener('visibilitychange', onVisible) })
 watch(() => prefs.poll, start)
-onBeforeUnmount(() => { clearInterval(timer); cancelStepUp() })
+onBeforeUnmount(() => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); cancelStepUp() })
 </script>
 
 <template>
   <div class="page">
     <div class="page-h"><h1>Telegram</h1><p>One forum topic per dev container: a message in topic <code>shop</code> runs Claude Code inside dockbench-shop.</p></div>
 
-    <p v-if="!t" class="fine">Loading…</p>
+    <p v-if="!t" class="fine">{{ store.tg.loadError ? `Status unavailable: ${store.tg.loadError}` : 'Loading…' }}</p>
 
     <section v-else-if="!t.deployed" class="plate dsec" aria-labelledby="tgNew">
       <div class="sec-h"><h2 class="lbl" id="tgNew">Deploy the bot</h2><span class="src-note">Portainer stack</span></div>
@@ -52,7 +54,7 @@ onBeforeUnmount(() => { clearInterval(timer); cancelStepUp() })
       <div class="sec-h"><h2 class="lbl" id="tgSetup">Setup</h2><span v-if="bot" class="src-note">@{{ bot }}</span></div>
       <ol class="steps">
         <li v-for="r in rows" :key="r.key">
-          <Led :sev="r.ok ? 'ok' : 'warn'" /> {{ r.text }}
+          <Led :sev="r.ok ? 'ok' : r.bad ? 'bad' : 'warn'" /> {{ r.text }}
           <template v-if="r.key === 'owner' && !r.ok && rows[0].ok">
             <div v-if="store.tg.claim" class="btns">
               <a class="btn pri" :href="store.tg.claim.link" target="_blank" rel="noopener">Open Telegram and press Start</a>

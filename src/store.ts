@@ -1,7 +1,7 @@
 import { computed, reactive, watch } from 'vue'
 import type { ActivityEvent, ApiCall, ConfigDiff, ContainerAction, ContainerConfig, DevContainer, DeviceSession, ExecResult, GitKind, GithubRepo, Guarded, HostUsage, PasskeyInfo, Pending, RepoActions, Session, SystemStatus, TelegramClaim, TelegramStatus, UsageWindow, Utilization } from './types'
 import { api, SignedOut, StepUpRequired } from './api'
-import { feedStale, openLive, sessionGone, type Live } from './api/live'
+import { feedStale, openLive, sessionGone, staleSnapshot, type Live } from './api/live'
 import { prefs } from './composables/usePrefs'
 import { compare, needsAttention, verdict, type SortKey } from './lib/verdict'
 import { notify, notifyOn } from './lib/notify'
@@ -15,11 +15,14 @@ import { hostPcts } from './lib/usage'
 export interface Confirm { target: string; action: Guarded; waiting: boolean } // target is a container id or 'deploy'
 export interface ExecState extends ExecResult { kind: GitKind; running: boolean; msg: string }
 export interface ClaudeLogin { phase: 'starting' | 'link' | 'sending' | 'done' | 'error'; url: string; msg: string }
+// check: msg is from the session check on load, not from a sign-in attempt
+export interface SignIn { busy: 'github' | 'passkey' | null; msg: string; denied: string | null; check?: boolean }
 export interface DeployRun { name: string; calls: ApiCall[]; id: string | null; error: string | null }
 export interface Draft extends DeployDraft { run: DeployRun | null }
 
 export type TgOp = 'deploy' | 'claim' | 'update'
-const newTg = () => ({ token: '', gid: '', busy: null as TgOp | null, calls: [] as ApiCall[], error: '', claim: null as TelegramClaim | null })
+// loadError: GET /api/telegram is failing (the page says so instead of judging the last answer), cleared by the next answer
+const newTg = () => ({ token: '', gid: '', busy: null as TgOp | null, calls: [] as ApiCall[], error: '', claim: null as TelegramClaim | null, loadError: '' })
 
 // the Updates panel in Settings: the running action, its trace, and the wait for the dashboard to come back after updating itself
 export type SysOp = 'check' | 'dashboard' | 'telegram'
@@ -32,7 +35,7 @@ export const store = reactive({
   ready: false, // session checked once
   session: null as Session | null,
   signedOut: false, // sign-in heading says "Signed out"
-  signin: { busy: null as 'github' | 'passkey' | null, msg: '', denied: null as string | null },
+  signin: { busy: null, msg: '', denied: null } as SignIn,
   confirm: null as Confirm | null,
   stepUpUntil: 0,
   passkeys: null as PasskeyInfo[] | null,
@@ -103,7 +106,7 @@ export const attentionCount = computed(() => store.containers.filter(needsAttent
 // dev containers whose repo's CI fails on the default branch, for the badge on Actions
 export const ciFailCount = computed(() => Object.values(store.ci).filter(a => a.state === 'failure').length)
 
-export const updatesCount = computed(() => [store.system?.dashboard, store.system?.telegram].filter(r => r?.imageUpdate).length)
+export const updatesCount = computed(() => [store.system?.dashboard, store.system?.collector, store.system?.telegram].filter(r => r?.imageUpdate).length)
 
 export const hostUse = computed(() => (store.host ? hostPcts(store.host) : null))
 
@@ -151,7 +154,7 @@ async function checkSession() {
     if (!optimistic) {
       initP = undefined
       store.session = null
-      store.signin.msg = e instanceof TypeError ? 'The dashboard server did not answer. Is it running?' : `Could not check the session (${errText(e)}).`
+      store.signin = { busy: null, msg: e instanceof TypeError ? 'The dashboard server did not answer. Is it running?' : `Could not check the session (${errText(e)}).`, denied: null, check: true }
     }
   }
   store.ready = true
@@ -278,12 +281,14 @@ function setHost(host: HostUsage) {
 const asleep = () => document.hidden && !notifyOn()
 
 let liveConn: Live | null = null
+// host.polledAt of the last forced poll (server clock), so a ticker snapshot built before it is dropped
+let forcedAt = 0
 // opens the feed; snapshots go through the same merge as a poll. closed = the server refused the reconnect: a 401 signs out, anything else (the server restarting behind the proxy) leaves the feed off and the next timer tick reconnects, never checkSession(), whose afterSignIn would reconnect at once in a loop and reset the deploy draft
 export function connectLive() {
   if (liveConn || !store.session || asleep()) return
   store.live = 'connecting'
   liveConn = openLive({
-    snapshot: ({ host, containers }) => { setHost(host); merge(containers); store.loading = false; store.live = 'on' },
+    snapshot: ({ host, containers }) => { if (staleSnapshot(host.polledAt, forcedAt)) return; setHost(host); merge(containers); store.loading = false; store.live = 'on' },
     down: error => { store.dockerDown = true; store.downError = error; store.lastPollAt = Date.now(); store.loading = false; store.live = 'on' },
     connecting: () => { store.live = 'connecting' },
     signedOut: () => expire(),
@@ -306,7 +311,7 @@ export function poll(opts: { force?: boolean } = {}): Promise<void> {
   inFlight = (async () => {
     try {
       // the host panel fills in as soon as /api/host answers, the container list can take longer
-      const [host, list] = await Promise.allSettled([api.getHost().then(setHost), api.getContainers()])
+      const [host, list] = await Promise.allSettled([api.getHost().then(h => { if (opts.force) forcedAt = Date.parse(h.polledAt); return setHost(h) }), api.getContainers()])
       if (host.status === 'fulfilled' && list.status === 'fulfilled') merge(list.value)
       else {
         const errs = [host, list].flatMap(r => (r.status === 'rejected' ? [r.reason] : []))
@@ -834,7 +839,18 @@ export function resetDeploy() {
 /* ---------- Telegram bot ---------- */
 
 export async function loadTelegram() {
-  try { store.telegram = await api.getTelegram() } catch (e) { fail(e) }
+  try {
+    const t = await api.getTelegram()
+    // a restarted bot no longer knows the claim code it handed out
+    if (store.telegram && store.telegram.startedAt !== t.startedAt) store.tg.claim = null
+    store.telegram = t
+    store.tg.loadError = ''
+  } catch (e) {
+    if (e instanceof SignedOut) return expire()
+    // toast once per failure streak, not on every poll
+    if (!store.tg.loadError) fail(e)
+    store.tg.loadError = errText(e)
+  }
 }
 
 const TG_GUARD: Record<TgOp, Guarded> = { deploy: 'deploy', claim: 'deploy', update: 'update' }
@@ -851,7 +867,7 @@ async function runTelegram(op: TgOp) {
   g.calls = []
   try {
     if (op === 'deploy') {
-      const gid = g.gid.trim() ? Number(g.gid) : undefined
+      const gid = g.gid.trim() || undefined
       const r = await api.deployTelegram(g.token.trim(), gid)
       g.token = ''
       g.calls = r.calls
@@ -880,18 +896,20 @@ async function runTelegram(op: TgOp) {
 /* ---------- usage (the collector's history) ---------- */
 
 let usageTimer: ReturnType<typeof setInterval> | undefined
+// only the newest request's answer lands: an older one can be for another window, or without the process lists the Usage page asked for since
+let usageSeq = 0
 
 export async function loadUsage() {
-  const w = store.usage.window
+  const seq = ++usageSeq
   try {
-    const data = await api.getUtilization(w, store.usage.topWatchers > 0)
-    if (store.usage.window !== w) return
+    const data = await api.getUtilization(store.usage.window, store.usage.topWatchers > 0)
+    if (seq !== usageSeq) return
     store.usage.data = data
     store.usage.error = null
     store.usage.at = Date.now()
   } catch (e) {
     if (e instanceof SignedOut) return expire()
-    if (store.usage.window !== w) return
+    if (seq !== usageSeq) return
     // the graphs go empty rather than show an old window as if it were current
     store.usage.data = null
     store.usage.error = errText(e)

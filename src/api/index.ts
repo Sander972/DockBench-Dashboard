@@ -31,7 +31,7 @@ export interface Api {
   deploy(req: DeployRequest): Promise<DeployResult>
   getTelegram(): Promise<TelegramStatus>
   // dockerGid only when the server could not read the socket's group
-  deployTelegram(token: string, dockerGid?: number): Promise<{ bot: string; calls: ApiCall[] }>
+  deployTelegram(token: string, dockerGid?: string): Promise<{ bot: string; calls: ApiCall[] }>
   claimTelegram(): Promise<TelegramClaim>
   updateTelegram(): Promise<UpdateResult>
   getSystem(): Promise<SystemStatus>

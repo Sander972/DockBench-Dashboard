@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import { feedStale, openLive, sessionGone, type LiveHandlers } from './live'
+import { feedStale, openLive, sessionGone, staleSnapshot, type LiveHandlers } from './live'
 
 // the parts of EventSource the wrapper uses: named listeners, onerror, readyState, close()
 class FakeSource {
@@ -57,4 +57,11 @@ test('feedStale flags a feed that has not delivered for three intervals', () => 
   expect(feedStale(10_000, 15_999)).toBe(false)
   expect(feedStale(10_000, 16_001)).toBe(true)
   expect(feedStale(0, 1)).toBe(false)
+})
+
+test('staleSnapshot drops a snapshot built before the last forced poll, even when it lands after it', () => {
+  const forcedAt = Date.parse('2026-11-09T10:00:01Z') // the forced poll after an action merged first
+  expect(staleSnapshot('2026-11-09T10:00:00Z', forcedAt)).toBe(true) // the ticker's build from before the action, landing late
+  expect(staleSnapshot('2026-11-09T10:00:02Z', forcedAt)).toBe(false) // the next tick
+  expect(staleSnapshot('2026-11-09T10:00:00Z', 0)).toBe(false) // no forced poll yet
 })

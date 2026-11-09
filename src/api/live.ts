@@ -22,3 +22,6 @@ export async function sessionGone(getSession: () => Promise<unknown>): Promise<b
 
 // a feed that is 'on' but has delivered nothing for three intervals is dead (half-open socket after sleep, a wedged ticker): reconnect it. lastAt 0 means no delivery yet, which the connect path handles
 export const feedStale = (lastAt: number, now: number, intervalMs = 2000) => lastAt > 0 && now - lastAt > 3 * intervalMs
+
+// a ticker snapshot built before an action's forced poll can land after it and flash the old pending or verdict back: drop it. Both times are the server's (host.polledAt is stamped when a build starts); forcedAt 0 means no forced poll yet
+export const staleSnapshot = (polledAt: string, forcedAt: number) => Date.parse(polledAt) < forcedAt

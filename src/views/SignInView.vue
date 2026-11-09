@@ -98,7 +98,7 @@ async function sendCode() {
           <p class="fine">Only the owner's GitHub account may sign in, so no session was created. Sign out of GitHub or switch accounts, then try again.</p>
         </div>
         <div v-else-if="!store.signin.busy && store.signin.msg" class="down">
-          <b>Sign-in failed.</b>
+          <b>{{ store.signin.check ? 'Connection error.' : 'Sign-in failed.' }}</b>
           <p class="fine">{{ store.signin.msg }}</p>
         </div>
       </div>

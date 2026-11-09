@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { Utilization } from '../types'
 import { gib, toGiB } from '../lib/format'
 import { topByName } from '../lib/usage'
@@ -17,7 +17,8 @@ function toggle(k: string) {
 }
 const pct = (v: number) => (v < 10 ? v.toFixed(1) : v.toFixed(0)) + '%'
 const ram = (v: number) => gib(toGiB(v)) + ' GiB'
-const procs = (ids: string[]) => topByName(props.u, ids)
+// the process rows of every open row, computed once per answer instead of once per use in the template
+const procs = computed(() => new Map(props.rows.filter(r => open.value.has(r.key)).map(r => [r.key, topByName(props.u, r.ids)])))
 </script>
 
 <template>
@@ -36,11 +37,11 @@ const procs = (ids: string[]) => topByName(props.u, ids)
           <td>{{ pct(r.cur) }}</td><td>{{ pct(r.avg) }}</td><td class="c-peak">{{ pct(r.peak) }}</td><td>{{ ram(r.mem) }}</td>
         </tr>
         <template v-if="open.has(r.key)">
-          <tr v-for="p in procs(r.ids)" :key="r.key + '/' + p.comm" class="sub">
+          <tr v-for="p in procs.get(r.key)" :key="r.key + '/' + p.comm" class="sub">
             <th scope="row" class="c-name"><span class="pc">{{ p.comm }}</span><span class="pids">{{ p.pids.length ? 'pid ' + p.pids.slice(0, 4).join(' ') + (p.pids.length > 4 ? ` +${p.pids.length - 4}` : '') : 'not running' }}</span><Sparkline :points="p.series" :from="from" :to="to" :step="u.stepMs" :max="Math.max(1, ...p.series.map(s => s.v))" /></th>
             <td>{{ pct(p.cur) }}</td><td>{{ pct(p.avg) }}</td><td class="c-peak">{{ pct(Math.max(0, ...p.series.map(s => s.v))) }}</td><td>{{ ram(p.rss) }}</td>
           </tr>
-          <tr v-if="!procs(r.ids).length" class="sub"><td colspan="5" class="fine">No process names kept for this window.</td></tr>
+          <tr v-if="!procs.get(r.key)?.length" class="sub"><td colspan="5" class="fine">No process names kept for this window.</td></tr>
         </template>
       </template>
     </tbody>

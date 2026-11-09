@@ -52,14 +52,16 @@ loadSystem()
 
 /* ---------- devices ---------- */
 
-const maxDevices = ref(store.session?.maxDevices ?? 5)
-const idleDays = ref(store.session?.idleDays ?? 2)
-const limitsBad = computed(() => !Number.isInteger(maxDevices.value) || maxDevices.value < 1 || maxDevices.value > 20 || !Number.isInteger(idleDays.value) || idleDays.value < 1 || idleDays.value > 30)
+// v-model.number leaves '' in an emptied field
+const maxDevices = ref<number | ''>(store.session?.maxDevices ?? 5)
+const idleDays = ref<number | ''>(store.session?.idleDays ?? 2)
+const whole = (v: number | '', max: number) => Number.isInteger(v) && +v >= 1 && +v <= max
+const limitsBad = computed(() => !whole(maxDevices.value, 20) || !whole(idleDays.value, 30))
 const limitsSame = computed(() => maxDevices.value === store.session?.maxDevices && idleDays.value === store.session?.idleDays)
 const limitsSaving = ref(false)
 async function saveLimits() {
   limitsSaving.value = true
-  await setSessionLimits(maxDevices.value, idleDays.value)
+  await setSessionLimits(+maxDevices.value, +idleDays.value) // limitsBad keeps '' from getting here
   limitsSaving.value = false
 }
 const deviceLine = (d: DeviceSession) => `${d.ip || 'unknown address'} · seen ${ago(d.lastSeenAt, now.value)} · since ${ago(d.createdAt, now.value).replace(' ago', '')}`

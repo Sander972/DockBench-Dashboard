@@ -34,7 +34,8 @@ export interface DevContainer {
   // the container's REPO_URL, known even while it is stopped and status is null
   repo: string | null
   state: ContainerState
-  startedAt: string
+  // null for a container created but never started
+  startedAt: string | null
   finishedAt: string | null
   exitCode: number | null
   restartCount: number

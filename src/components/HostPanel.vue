@@ -25,7 +25,9 @@ function read(m: 'cpu' | 'mem') {
 const noCollector = computed(() => store.host?.collector === false)
 
 const h = computed(() => store.host)
-const pollText = computed(() => store.dockerDown ? (store.lastGoodAt ? `last good poll ${ago(store.lastGoodAt, now.value)}` : 'no good poll yet') : store.lastPollAt ? `polled ${dur((now.value - store.lastPollAt) / 1000)} ago · every ${prefs.poll}s` : `every ${prefs.poll}s`)
+// the live feed delivers every 2 s whatever the poll setting
+const every = computed(() => (store.live === 'on' ? 'live' : `every ${prefs.poll}s`))
+const pollText = computed(() => store.dockerDown ? (store.lastGoodAt ? `last good poll ${ago(store.lastGoodAt, now.value)}` : 'no good poll yet') : store.lastPollAt ? `polled ${dur((now.value - store.lastPollAt) / 1000)} ago · ${every.value}` : every.value)
 
 const STATES = [['running', 'running'], ['restarting', 'restarting'], ['paused', 'paused'], ['created', 'created'], ['dead', 'dead'], ['exited', 'stopped']] as const
 // zero buckets are left out, except stopped

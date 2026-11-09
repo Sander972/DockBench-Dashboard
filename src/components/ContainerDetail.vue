@@ -169,7 +169,8 @@ onUpdated(() => {
           <h2 tabindex="-1"><span class="pre">dockbench-</span>{{ c.name.replace(/^dockbench-/, '') }}</h2>
           <div class="d-sub">
             <span class="state" :class="'s-' + v.sev">{{ v.word }}</span>
-            <span v-if="run">up {{ since(c.startedAt, now) }}</span>
+            <span v-if="!c.startedAt">never started</span>
+            <span v-else-if="run">up {{ since(c.startedAt, now) }}</span>
             <span v-else-if="c.state === 'exited'">stopped {{ ago(c.finishedAt ?? c.startedAt, now) }}</span>
             <span v-else><span class="num">{{ c.restartCount }}</span> restarts</span>
           </div>
@@ -189,7 +190,7 @@ onUpdated(() => {
       <div v-if="c.state === 'restarting'" class="callout bad">
         <h3><Led sev="bad" blink />Clone fails, container restarts in a loop</h3>
         <p v-if="c.lastError">{{ c.lastError }}</p>
-        <p>Check REPO_URL in the Portainer stack, or give the token access to this repo. Stopping it ends the loop.</p>
+        <p>Check REPO_URL in the Portainer stack. The container's deploy key must open this repo, or, when deployed with the gh login, the GitHub account it signed in with must have access. Stopping it ends the loop.</p>
       </div>
       <ClaudeLoginCallout v-if="showClaude" :id="c.id" />
 
@@ -204,6 +205,7 @@ onUpdated(() => {
             <div class="vital" :title="`Writable layer ${gib(toGiB(c.diskRw))} GiB, /home/dev volume ${gib(toGiB(c.diskVolume))} GiB, budget ${toGiB(DISK_BUDGET)} GiB`"><span class="lbl">Disk</span><span class="num big" :class="useCls(diskPct(c))">{{ diskPct(c).toFixed(0) }}%</span><span class="num v-sub">{{ gib(toGiB(diskBytes(c))) }}/{{ toGiB(DISK_BUDGET) }} GiB</span></div>
           </div>
           <TrendChart v-if="run && hist" :cpu="hist.cpu" :mem="hist.mem" :from="hist.from" :to="hist.to" :step="hist.step" />
+          <p v-else-if="run" class="fine">{{ store.usage.error ? 'The collector is not answering, so there is no history.' : store.usage.data ? 'No history for this container yet.' : 'Loading the history…' }}</p>
           <p v-else class="fine">Docker reports no CPU or memory for a {{ c.state === 'exited' ? 'stopped' : c.state }} container.</p>
         </section>
 
@@ -254,7 +256,7 @@ onUpdated(() => {
             <div class="sec-h"><h3 :id="'c-' + c.id" class="lbl">Container</h3><span class="src-note">Docker API</span></div>
             <dl class="facts">
               <dt>State</dt><dd><span class="num">{{ c.state }}{{ c.state === 'exited' ? ` · exit ${c.exitCode}` : '' }}</span> · <span class="num">{{ c.restartCount }}</span> restart{{ c.restartCount === 1 ? '' : 's' }}</dd>
-              <dt>Started</dt><dd class="num">{{ new Date(c.startedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) }}</dd>
+              <dt>Started</dt><dd class="num">{{ c.startedAt ? new Date(c.startedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : 'never started' }}</dd>
               <dt>ID</dt><dd class="num">{{ sh }} · devnet · proxy</dd>
               <dt>Image</dt><dd><span class="num">{{ c.image }}</span><br><span class="fine" :class="{ 's-warn': c.imageUpdate }">{{ imageNote }}</span></dd>
             </dl>
