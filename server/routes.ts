@@ -1014,10 +1014,10 @@ export const routes = {
     }),
   },
 
-  // TelegramStatus in src/types.ts. /status is asked with a 2 s timeout on every poll: the bot answers from memory, so there is no tracker like the dev containers have.
+  // TelegramStatus in src/types.ts; now is the server clock, which the page compares the bot's last_poll_at with (same host), so a skewed browser clock does not turn row 1 red. /status is asked with a 2 s timeout on every poll: the bot answers from memory, so there is no tracker like the dev containers have.
   '/api/telegram': auth(async () => {
     const c = await containerByName(env.dockerHost, TELEGRAM_NAME)
-    if (!c) return json({ deployed: false, state: null, startedAt: null, image: null, imageUpdate: null, status: null, statusError: null })
+    if (!c) return json({ deployed: false, state: null, startedAt: null, image: null, imageUpdate: null, status: null, statusError: null, now: new Date().toISOString() })
     const x = await inspectContainer(env.dockerHost, c.id)
     let status: BotStatus | null = null
     let statusError: 'starting' | 'dead' | null = null
@@ -1028,7 +1028,7 @@ export const routes = {
       if (!status) statusError = Date.now() - Date.parse(x.startedAt) < 30_000 ? 'starting' : 'dead'
     }
     const check = images.peek(x.image)
-    return json({ deployed: true, state: c.state, startedAt: x.startedAt, image: x.image, imageUpdate: updateAvailable(x.image, check?.imageId ?? null, x.imageId), status, statusError })
+    return json({ deployed: true, state: c.state, startedAt: x.startedAt, image: x.image, imageUpdate: updateAvailable(x.image, check?.imageId ?? null, x.imageId), status, statusError, now: new Date().toISOString() })
   }),
 
   // body { token, dockerGid? }: getMe checks the token, then the same checks and Portainer stack as a dev container deploy. The token goes only to Telegram and into the stack env.

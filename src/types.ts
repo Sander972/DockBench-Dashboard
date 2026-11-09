@@ -121,7 +121,7 @@ export interface Prefs {
 // GET /status of the Telegram bot, passed through by GET /api/telegram
 // runs: Claude sessions running in the topic (bots from before 2026-10-14 send running only)
 export interface BotStatus { bot: string; owner: boolean; group: boolean; topics: { name: string; running: boolean; runs?: number; queued: number }[]; last_poll_at: string | null; uptime_seconds: number }
-export interface TelegramStatus { deployed: boolean; state: string | null; startedAt: string | null; image: string | null; imageUpdate: boolean | null; status: BotStatus | null; statusError: 'starting' | 'dead' | null }
+export interface TelegramStatus { deployed: boolean; state: string | null; startedAt: string | null; image: string | null; imageUpdate: boolean | null; status: BotStatus | null; statusError: 'starting' | 'dead' | null; now: string }
 export interface TelegramClaim { code: string; link: string }
 
 // GET /api/system: the dashboard's own container and the bot's, for the Updates panel in Settings. imageUpdate as on DevContainer; checkError is why the last pull failed.
