@@ -24,8 +24,9 @@ export function parseCookie(secret: string, cookie: string | undefined | null): 
 }
 
 // only this process writes the file, so it is read once per data dir and kept in memory; flushed with temp file plus rename through one queue
-type Cache = { list: SessionRecord[]; dirty: boolean; flushedAt: number }
-const caches = new Map<string, Cache>()
+type Cache = { list: SessionRecord[]; flushedAt: number }
+// the load promise, not its result, so two first calls on a cold cache share one read and one list
+const caches = new Map<string, Promise<Cache>>()
 let queue: Promise<unknown> = Promise.resolve()
 
 const isRecord = (v: unknown): v is SessionRecord => {
@@ -33,25 +34,30 @@ const isRecord = (v: unknown): v is SessionRecord => {
   return !!r && typeof r.id === 'string' && typeof r.createdAt === 'number' && typeof r.lastSeenAt === 'number' && typeof r.device === 'string' && typeof r.ip === 'string'
 }
 
-async function load(dataDir: string): Promise<Cache> {
-  const cached = caches.get(dataDir)
-  if (cached) return cached
+function load(dataDir: string): Promise<Cache> {
+  let c = caches.get(dataDir)
+  if (!c) {
+    c = read(dataDir)
+    caches.set(dataDir, c)
+  }
+  return c
+}
+
+async function read(dataDir: string): Promise<Cache> {
   const f = Bun.file(`${dataDir}/sessions.json`)
   const stored = (await f.exists()) ? ((await f.json().catch(() => null)) as { sessions?: unknown } | null) : null
   // anything malformed reads as no sessions (fail closed), the next write rewrites it
   const list = Array.isArray(stored?.sessions) ? stored!.sessions.filter(isRecord) : []
-  const c = { list, dirty: false, flushedAt: 0 }
-  caches.set(dataDir, c)
-  return c
+  return { list, flushedAt: 0 }
 }
 
+// flushedAt is set when the write is queued, so a burst of touches right after it queues no second one; the write serializes c.list as it is when it runs
 function flush(dataDir: string, c: Cache, now: number): Promise<void> {
+  c.flushedAt = now
   const run = queue.then(async () => {
     await mkdir(dataDir, { recursive: true })
     await Bun.write(`${dataDir}/sessions.json.tmp`, JSON.stringify({ sessions: c.list }))
     await rename(`${dataDir}/sessions.json.tmp`, `${dataDir}/sessions.json`)
-    c.dirty = false
-    c.flushedAt = now
   })
   queue = run.catch(() => {})
   return run
@@ -100,7 +106,6 @@ export async function touch(dataDir: string, id: string, now = Date.now()): Prom
   const r = c.list.find((s) => s.id === id)
   if (!r) return
   r.lastSeenAt = now
-  c.dirty = true
   if (now - c.flushedAt >= FLUSH_MS) await flush(dataDir, c, now)
 }
 

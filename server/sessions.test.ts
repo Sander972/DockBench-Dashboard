@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -111,5 +111,23 @@ test('a corrupt or malformed sessions.json reads as no sessions and the next cre
     expect(await listSessions(dir, DEFAULT_LIMITS, 1)).toEqual([])
     const r = await createSessionRecord(dir, who, DEFAULT_LIMITS, 1)
     expect(((await Bun.file(join(dir, 'sessions.json')).json()) as { sessions: unknown[] }).sessions).toEqual([r])
+  }
+})
+
+test('two first calls on a cold cache share one load, so both new sessions are kept', async () => {
+  const dir = await fresh()
+  const [a, b] = await Promise.all([createSessionRecord(dir, who, DEFAULT_LIMITS, 1), createSessionRecord(dir, who, DEFAULT_LIMITS, 1)])
+  expect((await listSessions(dir, DEFAULT_LIMITS, 1)).map((s) => s.id).sort()).toEqual([a.id, b.id].sort())
+})
+
+test('a burst of touches past the flush interval queues one write', async () => {
+  const dir = await fresh()
+  const r = await createSessionRecord(dir, who, DEFAULT_LIMITS, 1)
+  const write = spyOn(Bun, 'write')
+  try {
+    await Promise.all(Array.from({ length: 10 }, (_, i) => touch(dir, r.id, 61_000 + i)))
+    expect(write).toHaveBeenCalledTimes(1)
+  } finally {
+    write.mockRestore()
   }
 })
