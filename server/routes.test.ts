@@ -835,6 +835,23 @@ test('a second deploy of the same project while the first runs answers 409 at on
   }
 })
 
+test('a second Telegram deploy while the first runs answers 409 at once', async () => {
+  externalFake = async () => (await Bun.sleep(300), Response.json({ ok: true, result: { username: 'mybot' } }))
+  dockerFake = () => new Response('down', { status: 500 })
+  const post = () => fetch(`${base}/api/telegram/deploy`, { method: 'POST', headers: { cookie: session, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: JSON.stringify({ token: '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw', dockerGid: '999' }) })
+  try {
+    const first = post()
+    await Bun.sleep(50)
+    const second = await post()
+    expect(second.status).toBe(409)
+    expect(((await second.json()) as { error: string }).error).toBe('A deploy of dockbench-telegram is already running')
+    expect((await first).status).toBe(502) // Docker is down in this test, so the first one fails after getMe
+  } finally {
+    externalFake = null
+    dockerFake = null
+  }
+})
+
 test('a Telegram stack create whose answer was lost but that Portainer created answers 201 with a warning', async () => {
   let created = false
   dockerFake = (req) => (new URL(req.url).pathname === '/containers/json' ? Response.json([]) : new Response('down', { status: 500 }))

@@ -54,3 +54,17 @@ test('findDeployKeys follows the Link header past the first 100 keys', async () 
     spy.mockRestore()
   }
 })
+
+test('findDeployKeys never follows a next page off api.github.com with the token', async () => {
+  const urls: string[] = []
+  const spy = spyOn(globalThis, 'fetch').mockImplementation((async (url: string) => {
+    urls.push(url)
+    return Response.json([{ id: 1, title: 'dockbench-shop', read_only: false }], { headers: { link: '<https://evil.example/keys?page=2>; rel="next"' } })
+  }) as unknown as typeof fetch)
+  try {
+    expect((await findDeployKeys('gho_x', 'me/shop', 'dockbench-shop', false)).map((k) => k.id)).toEqual([1])
+    expect(urls).toEqual(['https://api.github.com/repos/me/shop/keys?per_page=100'])
+  } finally {
+    spy.mockRestore()
+  }
+})

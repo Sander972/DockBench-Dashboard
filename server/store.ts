@@ -38,13 +38,18 @@ export async function writeAccount(dataDir: string, account: Account): Promise<v
   await Bun.write(`${dataDir}/github.json`, JSON.stringify(account))
 }
 
-// the unauthenticated OAuth callback writes events too, so the log is capped: past maxBytes it moves to activity.jsonl.1 (replacing the previous one) and starts again
-export async function appendEvent(dataDir: string, event: ActivityEvent, maxBytes = 5 * 1024 * 1024): Promise<void> {
-  await mkdir(dataDir, { recursive: true })
-  const path = `${dataDir}/activity.jsonl`
-  const line = JSON.stringify(event) + '\n'
-  if ((await stat(path).then((s) => s.size, () => 0)) + Buffer.byteLength(line) > maxBytes) await rename(path, `${path}.1`).catch(() => {})
-  await appendFile(path, line)
+// the unauthenticated OAuth callback writes events too, so the log is capped: past maxBytes it moves to activity.jsonl.1 (replacing the previous one) and starts again. Writes run one at a time, or two appends crossing the cap together would both rotate and the second would move a one-line file over the rotated one.
+let appends: Promise<unknown> = Promise.resolve()
+export function appendEvent(dataDir: string, event: ActivityEvent, maxBytes = 5 * 1024 * 1024): Promise<void> {
+  const run = appends.then(async () => {
+    await mkdir(dataDir, { recursive: true })
+    const path = `${dataDir}/activity.jsonl`
+    const line = JSON.stringify(event) + '\n'
+    if ((await stat(path).then((s) => s.size, () => 0)) + Buffer.byteLength(line) > maxBytes) await rename(path, `${path}.1`).catch(() => {})
+    await appendFile(path, line)
+  })
+  appends = run.catch(() => {})
+  return run
 }
 
 // reads only the newest file, so the feed is short right after a rotation; at most 5 MB per request

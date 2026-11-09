@@ -46,3 +46,15 @@ test('the activity log rotates past maxBytes into one .1 file and readEvents rea
   expect((await readEvents(dir)).map((e) => e.target)).toEqual(['p5'])
   expect((await Bun.file(join(dir, 'activity.jsonl.1')).text()).split('\n').filter(Boolean).map((l) => (JSON.parse(l) as { target: string }).target)).toEqual(['p3', 'p4'])
 })
+
+test('appends that cross the cap at the same time rotate once each in order, losing no rotated file', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dockbench-activity-'))
+  const ev = (target: string) => ({ at: 't', actor: 'octocat', what: 'Deployed', target, ok: true, calls: [] })
+  const size = JSON.stringify(ev('p1')).length + 1
+  await appendEvent(dir, ev('p1'), size * 2)
+  await appendEvent(dir, ev('p2'), size * 2)
+  await Promise.all(['p3', 'p4', 'p5'].map((t) => appendEvent(dir, ev(t), size * 2)))
+  const targets = async (f: string) => (await Bun.file(join(dir, f)).text()).split('\n').filter(Boolean).map((l) => (JSON.parse(l) as { target: string }).target)
+  expect(await targets('activity.jsonl.1')).toEqual(['p3', 'p4'])
+  expect(await targets('activity.jsonl')).toEqual(['p5'])
+})

@@ -105,3 +105,8 @@ export function topByName(u: Utilization, ids: string[]): { comm: string; pids: 
     }
   }).sort((a, b) => b.avg - a.avg)
 }
+
+// whether a /api/utilization answer may replace what the page shows: newer than the last one that landed (not the last one sent, or on a link slower than the 10 s refresh no answer would ever land), for the window shown, and with process lists if a watcher now wants them
+export function usageLands(req: { seq: number; window: UsageWindow; top: boolean }, landed: number, now: { window: UsageWindow; wantTop: boolean }): boolean {
+  return req.seq > landed && req.window === now.window && (req.top || !now.wantTop)
+}

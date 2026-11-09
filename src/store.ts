@@ -10,7 +10,7 @@ import { painted } from './lib/paint'
 import { DEFAULT_IMAGE, deployErrors, slug, type DeployDraft } from './lib/deploy'
 import { gitMsg } from './lib/format'
 import { finishedRuns, runWord } from './lib/actions'
-import { hostPcts } from './lib/usage'
+import { hostPcts, usageLands } from './lib/usage'
 
 export interface Confirm { target: string; action: Guarded; waiting: boolean } // target is a container id or 'deploy'
 export interface ExecState extends ExecResult { kind: GitKind; running: boolean; msg: string }
@@ -898,18 +898,22 @@ async function runTelegram(op: TgOp) {
 let usageTimer: ReturnType<typeof setInterval> | undefined
 // only the newest request's answer lands: an older one can be for another window, or without the process lists the Usage page asked for since
 let usageSeq = 0
+let usageLanded = 0
 
 export async function loadUsage() {
-  const seq = ++usageSeq
+  const req = { seq: ++usageSeq, window: store.usage.window, top: store.usage.topWatchers > 0 }
+  const lands = () => usageLands(req, usageLanded, { window: store.usage.window, wantTop: store.usage.topWatchers > 0 })
   try {
-    const data = await api.getUtilization(store.usage.window, store.usage.topWatchers > 0)
-    if (seq !== usageSeq) return
+    const data = await api.getUtilization(req.window, req.top)
+    if (!lands()) return
+    usageLanded = req.seq
     store.usage.data = data
     store.usage.error = null
     store.usage.at = Date.now()
   } catch (e) {
     if (e instanceof SignedOut) return expire()
-    if (seq !== usageSeq) return
+    if (!lands()) return
+    usageLanded = req.seq
     // the graphs go empty rather than show an old window as if it were current
     store.usage.data = null
     store.usage.error = errText(e)

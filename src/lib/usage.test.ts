@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import type { Utilization } from '../types'
-import { byName, containerSeries, hostPcts, hostSeries, summarize, topByName } from './usage'
+import { byName, containerSeries, hostPcts, hostSeries, summarize, topByName, usageLands } from './usage'
 
 const GiB = 2 ** 30
 // three 10 s points; a1 and a2 are the same container before and after a recreate, both named shop; db runs throughout
@@ -73,5 +73,18 @@ describe('usage', () => {
     expect(t[1]).toMatchObject({ comm: 'git', pids: [], cur: 0, rss: 10 })
     expect(t[1].avg).toBeCloseTo(5 / 3)
     expect(topByName(u, ['host']).map((r) => r.comm)).toEqual(['dockerd'])
+  })
+})
+
+describe('usageLands', () => {
+  const now = { window: '24h' as const, wantTop: true }
+  test('a slow answer lands when nothing newer has, even if later requests were sent since', () => {
+    expect(usageLands({ seq: 3, window: '24h', top: true }, 0, now)).toBe(true)
+  })
+  test('an answer older than the one that landed, for another window, or without the process lists the page now wants is dropped', () => {
+    expect(usageLands({ seq: 3, window: '24h', top: true }, 4, now)).toBe(false)
+    expect(usageLands({ seq: 5, window: '1h', top: true }, 4, now)).toBe(false)
+    expect(usageLands({ seq: 5, window: '24h', top: false }, 4, now)).toBe(false)
+    expect(usageLands({ seq: 5, window: '24h', top: true }, 4, { window: '24h', wantTop: false })).toBe(true)
   })
 })

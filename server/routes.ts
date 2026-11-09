@@ -172,7 +172,7 @@ async function lastFetches(): Promise<Map<string, string>> {
 
 // action in progress per container id, so every tab sees "Stopping…" and a second action is refused
 const pending = new Map<string, 'start' | 'stop' | 'restart' | 'update' | 'config' | 'vscode' | 'claudeConfig' | 'remove'>()
-// container names with a deploy in flight (/api/deploy)
+// container names with a deploy in flight (/api/deploy, /api/telegram/deploy)
 const deploying = new Set<string>()
 
 // runs `run` while `pending` holds the container; no await between the check and the set, or two requests both pass
@@ -1053,6 +1053,9 @@ export const routes = {
       const token = body.token.trim()
       const given = parseGid(body.dockerGid)
       if (given === 'invalid') return json({ error: 'Docker group id must be a whole number' }, 400)
+      // a double submit would pass the 409 checks twice, and the second create's lookup would find the first one's stack
+      if (deploying.has(TELEGRAM_NAME)) return json({ error: `A deploy of ${TELEGRAM_NAME} is already running` }, 409)
+      deploying.add(TELEGRAM_NAME)
       const { calls, step } = tracer()
       const started = Date.now()
       try {
@@ -1076,6 +1079,8 @@ export const routes = {
       } catch (e) {
         await log(req, server, 'Deploy failed', TELEGRAM_NAME, { ok: false, note: errMsg(e), calls, ms: Date.now() - started })
         return json({ error: errMsg(e), calls }, e instanceof HttpError ? e.status : 502)
+      } finally {
+        deploying.delete(TELEGRAM_NAME)
       }
     }),
   },

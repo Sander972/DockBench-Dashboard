@@ -36,14 +36,15 @@ async function gh<T>(token: string, path: string, init: { method?: string; body?
   return res.status === 204 ? (undefined as T) : (res.json() as Promise<T>)
 }
 
-// every page of a list, following the Link header's rel="next"
+// every page of a list, following the Link header's rel="next": only on api.github.com (the token goes with it) and for at most 50 pages
 async function ghAll<T>(token: string, path: string): Promise<T[]> {
   const out: T[] = []
   let url: string | null = API + path
-  while (url) {
+  for (let page = 0; url && page < 50; page++) {
     const res = await ghFetch(token, url)
     out.push(...((await res.json()) as T[]))
-    url = res.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1] ?? null
+    const next = res.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1]
+    url = next?.startsWith(API + '/') ? next : null
   }
   return out
 }
