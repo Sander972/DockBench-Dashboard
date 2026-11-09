@@ -142,10 +142,11 @@ test('ttlCache shares one answer for the ttl and keeps no failure', async () => 
   expect(await get()).toBe(4)
 })
 
-test('after a dashboard restart, a long-running container whose status server fails is dead at once, a young one starting', async () => {
+test('after a dashboard restart, a long-running container whose status server fails twice is dead, a young one starting', async () => {
   const view = statusTracker(() => Promise.reject(new Error('refused')), 20, 0, 60_000)
   const long = new Date(Date.now() - 120_000).toISOString()
   const young = new Date(Date.now() - 1_000).toISOString()
+  expect((await view('a', 'x', long, true)).statusError).toBe('starting')
   expect((await view('a', 'x', long, true)).statusError).toBe('dead')
   expect((await view('b', 'y', young, true)).statusError).toBe('starting')
   // a restart under the same id is young again

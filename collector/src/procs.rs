@@ -128,18 +128,17 @@ pub fn walk(proc_root: &Path) -> Vec<ProcRaw> {
     Walker::default().walk(proc_root)
 }
 
-/// Sums `cur` per `(container, comm)`; CPU is the jiffies delta against `prev` as a share of the host's delta (0-100). A pid absent from `prev` that started after every process `prev` saw was born since that walk, so all its jiffies count; one that started earlier (the walk skipped it, or `prev` is empty because the walk failed) would count its whole lifetime, so it contributes 0, as does a pid reused under another name or container, or whose counter went back. Keeps entries with CPU above 0 or more than 1 MiB resident.
+/// Sums `cur` per `(container, comm)`; CPU is the jiffies delta against `prev` as a share of the host's delta (0-100). A pid is the same process as in `prev` when its start time matches (a renamed process keeps counting). A new process, or a reused pid, that started after every process `prev` saw was born since that walk, so all its jiffies count; one that started earlier (the walk skipped it, or `prev` is empty because the walk failed) would count its whole lifetime, so it contributes 0, as does a counter that went back. Keeps entries with CPU above 0 or more than 1 MiB resident.
 pub fn aggregate(prev: &[ProcRaw], cur: &[ProcRaw], host_delta_jiffies: u64) -> Vec<ProcAgg> {
     let before: HashMap<u32, &ProcRaw> = prev.iter().map(|p| (p.pid, p)).collect();
     let newest = prev.iter().map(|p| p.start).max();
     let mut groups: HashMap<(Option<&str>, &str), (Vec<u32>, u64, u64)> = HashMap::new();
     for p in cur {
         let d = match before.get(&p.pid) {
-            Some(b) if b.comm == p.comm && b.container == p.container => p.jiffies.saturating_sub(b.jiffies),
-            Some(_) => 0,
+            Some(b) if b.start == p.start => p.jiffies.saturating_sub(b.jiffies),
             // known limit: a process born and gone between two walks is never seen, and a process's CPU between its last walk and its exit is lost (both still count in the container's cgroup total)
-            None if newest.is_some_and(|n| p.start > n) => p.jiffies,
-            None => 0,
+            _ if newest.is_some_and(|n| p.start > n) => p.jiffies,
+            _ => 0,
         };
         let g = groups.entry((p.container.as_deref(), p.comm.as_str())).or_default();
         g.0.push(p.pid);
@@ -246,10 +245,12 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_ignores_a_reused_pid_and_a_counter_going_back() {
-        let prev = vec![ProcRaw { pid: 1, comm: "git".into(), jiffies: 100, rss: 0, container: None, start: 0 }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 900, rss: 0, container: None, start: 0 }];
-        let cur = vec![ProcRaw { pid: 1, comm: "claude".into(), jiffies: 300, rss: 0, container: None, start: 0 }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 10, rss: 0, container: None, start: 0 }];
-        assert!(aggregate(&prev, &cur, 400).is_empty());
+    fn aggregate_matches_a_pid_by_start_time() {
+        let prev = vec![ProcRaw { pid: 1, comm: "git".into(), jiffies: 100, rss: 0, container: None, start: 10 }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 900, rss: 0, container: None, start: 10 }, ProcRaw { pid: 3, comm: "git".into(), jiffies: 500, rss: 0, container: None, start: 20 }];
+        // pid 1 was renamed by exec, pid 2's counter went back, pid 3 is a new git reusing the pid of one that exited
+        let cur = vec![ProcRaw { pid: 1, comm: "claude".into(), jiffies: 140, rss: 0, container: None, start: 10 }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 10, rss: 0, container: None, start: 10 }, ProcRaw { pid: 3, comm: "git".into(), jiffies: 80, rss: 0, container: None, start: 30 }];
+        let a = aggregate(&prev, &cur, 400);
+        assert_eq!(a.iter().map(|x| (x.comm.as_str(), x.cpu_pct)).collect::<Vec<_>>(), vec![("git", 20.0), ("claude", 10.0)]);
     }
 
     #[test]

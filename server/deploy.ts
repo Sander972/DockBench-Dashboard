@@ -59,7 +59,15 @@ export interface DeployResult {
   warning?: string
 }
 
-export const lostCreate = (e: unknown) => `Portainer created the stack, but its answer was lost: ${(e as Error).message}`
+// A failed create answer can still mean a created stack: asks Portainer (one more call in calls), then answers the warning when the stack exists, so the deploy is reported done instead of a failure followed by a 409 on the next try; otherwise rethrows e, after onNone when Portainer confirms there is no stack (not when that lookup fails too).
+export async function afterFailedCreate(e: unknown, calls: ApiCall[], findStack: () => Promise<{ Id: number } | null>, onNone?: () => Promise<void>): Promise<string> {
+  const check: ApiCall = { method: 'GET', path: '/api/stacks', status: null }
+  calls.push(check)
+  const stack = await findStack().then((s) => { check.status = 200; return s }, () => undefined)
+  if (stack === null) await onNone?.()
+  if (!stack) throw e
+  return `Portainer created the stack, but its answer was lost: ${(e as Error).message}`
+}
 
 export class DeployFailure extends Error {
   status: number
@@ -110,17 +118,11 @@ export async function deploy(project: string, repo: string, deps: DeployDeps, co
   try {
     await step('POST', '/api/stacks/create/standalone/string', 200, () => deps.createStack(name))
   } catch (e) {
-    // the keys must not outlive a stack that was never created. A failed response can still mean a created stack whose container clones with these keys, so they go only when Portainer confirms there is no stack.
-    const check: ApiCall = { method: 'GET', path: '/api/stacks', status: null }
-    calls.push(check)
-    const stack = await deps.findStack(name).then((s) => { check.status = 200; return s }, () => undefined)
-    if (stack === null) {
+    // the keys must not outlive a stack that was never created. A created stack's container clones with these keys, so they go only when Portainer confirms there is no stack.
+    warning = await afterFailedCreate(e, calls, () => deps.findStack(name), async () => {
       if (key) await unkey(repo, key.id, deps.deleteDeployKey!)
       if (configKey) await unkey(configRepo, configKey.id, deps.deleteConfigKey!)
-    }
-    // the stack exists: report the deploy as done, so the container is kept and found below instead of a failure followed by a 409 on the next try
-    if (!stack) throw e
-    warning = lostCreate(e)
+    })
   }
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   let id = ''

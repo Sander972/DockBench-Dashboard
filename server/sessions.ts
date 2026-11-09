@@ -1,6 +1,6 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { mkdir, rename } from 'node:fs/promises'
-import { SESSION_TTL_SECONDS } from './session'
+import { safeEqual, SESSION_TTL_SECONDS } from './session'
 
 // One record per signed-in device, in /data/sessions.json. The cookie is only the record id plus an HMAC; expiry lives here: idle (idleDays since lastSeenAt) and hard (30 days since createdAt).
 export interface SessionRecord { id: string; createdAt: number; lastSeenAt: number; device: string; ip: string }
@@ -16,10 +16,7 @@ export const signCookie = (secret: string, id: string) => `${id}.${sign(secret, 
 export function parseCookie(secret: string, cookie: string | undefined | null): string | null {
   const parts = (cookie ?? '').split('.')
   if (parts.length !== 2 || !parts[0] || !parts[1]) return null
-  const got = Buffer.from(parts[1])
-  const want = Buffer.from(sign(secret, parts[0]))
-  // compared by bytes: timingSafeEqual throws on a byte-length mismatch, which a non-ASCII signature of the right string length would cause
-  if (got.length !== want.length || !timingSafeEqual(got, want)) return null
+  if (!safeEqual(parts[1], sign(secret, parts[0]))) return null
   return parts[0]
 }
 
@@ -51,7 +48,7 @@ async function read(dataDir: string): Promise<Cache> {
   return { list, flushedAt: 0 }
 }
 
-// flushedAt is set when the write is queued, so a burst of touches right after it queues no second one; the write serializes c.list as it is when it runs
+// flushedAt is set when the write is queued, so a burst of touches right after it queues no second one, and cleared when that write fails, so the next touch retries; the write serializes c.list as it is when it runs
 function flush(dataDir: string, c: Cache, now: number): Promise<void> {
   c.flushedAt = now
   const run = queue.then(async () => {
@@ -59,7 +56,7 @@ function flush(dataDir: string, c: Cache, now: number): Promise<void> {
     await Bun.write(`${dataDir}/sessions.json.tmp`, JSON.stringify({ sessions: c.list }))
     await rename(`${dataDir}/sessions.json.tmp`, `${dataDir}/sessions.json`)
   })
-  queue = run.catch(() => {})
+  queue = run.catch(() => { if (c.flushedAt === now) c.flushedAt = 0 })
   return run
 }
 

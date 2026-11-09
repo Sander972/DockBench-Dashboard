@@ -131,3 +131,17 @@ test('a burst of touches past the flush interval queues one write', async () => 
     write.mockRestore()
   }
 })
+
+test('a failed write is retried by the next touch, not a minute later', async () => {
+  const dir = await fresh()
+  const r = await createSessionRecord(dir, who, DEFAULT_LIMITS, 1)
+  const write = spyOn(Bun, 'write').mockImplementationOnce(() => Promise.reject(new Error('disk full')))
+  try {
+    await expect(touch(dir, r.id, 61_000)).rejects.toThrow('disk full')
+    await touch(dir, r.id, 62_000)
+    expect(write).toHaveBeenCalledTimes(2)
+    expect(((await Bun.file(join(dir, 'sessions.json')).json()) as { sessions: { lastSeenAt: number }[] }).sessions[0].lastSeenAt).toBe(62_000)
+  } finally {
+    write.mockRestore()
+  }
+})

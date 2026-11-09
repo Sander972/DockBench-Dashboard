@@ -281,14 +281,14 @@ function setHost(host: HostUsage) {
 const asleep = () => document.hidden && !notifyOn()
 
 let liveConn: Live | null = null
-// host.polledAt of the last forced poll (server clock), so a ticker snapshot built before it is dropped
+// host.polledAt of the last forced poll (server clock), so a ticker snapshot built before it is dropped; only the next snapshot is checked (later ones were built after it), so a server clock stepping back cannot drop the feed for good
 let forcedAt = 0
 // opens the feed; snapshots go through the same merge as a poll. closed = the server refused the reconnect: a 401 signs out, anything else (the server restarting behind the proxy) leaves the feed off and the next timer tick reconnects, never checkSession(), whose afterSignIn would reconnect at once in a loop and reset the deploy draft
 export function connectLive() {
   if (liveConn || !store.session || asleep()) return
   store.live = 'connecting'
   liveConn = openLive({
-    snapshot: ({ host, containers }) => { if (staleSnapshot(host.polledAt, forcedAt)) return; setHost(host); merge(containers); store.loading = false; store.live = 'on' },
+    snapshot: ({ host, containers }) => { const stale = staleSnapshot(host.polledAt, forcedAt); forcedAt = 0; if (stale) return; setHost(host); merge(containers); store.loading = false; store.live = 'on' },
     down: error => { store.dockerDown = true; store.downError = error; store.lastPollAt = Date.now(); store.loading = false; store.live = 'on' },
     connecting: () => { store.live = 'connecting' },
     signedOut: () => expire(),

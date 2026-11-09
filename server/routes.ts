@@ -12,7 +12,7 @@ import { containerByName, containerLogs, containerPost, dockerInfo, execRun, ima
 import { diskUsage } from './host'
 import { createCollector, history as collectorHistory, WINDOWS, type Window } from './collector'
 import { cpusetFor, createStack, deleteStack, findStack, fromStackFile, patchEnv, pullImage, putStack, readStack, redeployStack, STACK_FILE, stackEnv, TELEGRAM_STACK_FILE, vscodeEnv } from './portainer'
-import { deploy, DeployFailure, lostCreate, REPO_RE, validateDeploy } from './deploy'
+import { afterFailedCreate, deploy, DeployFailure, REPO_RE, validateDeploy } from './deploy'
 import { deleteKeys, keyTitle, removeStack, stackKeys } from './remove'
 import { generateDeployKey } from './sshkey'
 import { deviceCode, fetchStatus, imageChecker, inspectCache, lastError, shared, statusTracker, ttlCache, updateAvailable } from './containers'
@@ -251,7 +251,8 @@ let selfUpdateError: string | null = null
 async function systemView(check: boolean) {
   const [dashboard, telegram, collector] = await Promise.all([DASHBOARD_NAME, TELEGRAM_NAME, COLLECTOR_NAME].map(async (name) => {
     const c = await containerByName(env.dockerHost, name)
-    const x = c ? await inspectContainer(env.dockerHost, c.id) : null
+    // a container removed between the lookup and the inspect (the panel's own recreate) reads as not deployed for this answer
+    const x = c ? await unlessGone(inspectContainer(env.dockerHost, c.id)) : null
     const k = !x ? null : check && !x.image.includes('@') ? await images.check(x.image) : images.peek(x.image)
     return imageRow(name, c, x, k)
   }))
@@ -1029,8 +1030,9 @@ export const routes = {
   // TelegramStatus in src/types.ts; now is the server clock, which the page compares the bot's last_poll_at with (same host), so a skewed browser clock does not turn row 1 red. /status is asked with a 2 s timeout on every poll: the bot answers from memory, so there is no tracker like the dev containers have.
   '/api/telegram': auth(async () => {
     const c = await containerByName(env.dockerHost, TELEGRAM_NAME)
-    if (!c) return json({ deployed: false, state: null, startedAt: null, image: null, imageUpdate: null, status: null, statusError: null, now: new Date().toISOString() })
-    const x = await inspectContainer(env.dockerHost, c.id)
+    // removed between the lookup and the inspect (an update recreating it) reads as not deployed for this answer
+    const x = c && (await unlessGone(inspectContainer(env.dockerHost, c.id)))
+    if (!c || !x) return json({ deployed: false, state: null, startedAt: null, image: null, imageUpdate: null, status: null, statusError: null, now: new Date().toISOString() })
     let status: BotStatus | null = null
     let statusError: 'starting' | 'dead' | null = null
     if (c.state === 'running') {
@@ -1051,8 +1053,9 @@ export const routes = {
       const body = (await req.json().catch(() => null)) as { token?: unknown; dockerGid?: unknown } | null
       if (!validToken(body?.token)) return json({ error: 'token must be the one @BotFather gave, like 123456789:AAH…' }, 400)
       const token = body.token.trim()
-      const given = parseGid(body.dockerGid)
-      if (given === 'invalid') return json({ error: 'Docker group id must be a whole number' }, 400)
+      // the typed id is only read, and checked, when the socket's group cannot be read here
+      const gid = (await dockerGid(env.dockerHost)) ?? parseGid(body.dockerGid)
+      if (gid === 'invalid') return json({ error: 'Docker group id must be a whole number' }, 400)
       // a double submit would pass the 409 checks twice, and the second create's lookup would find the first one's stack
       if (deploying.has(TELEGRAM_NAME)) return json({ error: `A deploy of ${TELEGRAM_NAME} is already running` }, 409)
       deploying.add(TELEGRAM_NAME)
@@ -1060,7 +1063,6 @@ export const routes = {
       const started = Date.now()
       try {
         const bot = await step('GET', '/getMe', 200, () => getMe(token))
-        const gid = (await dockerGid(env.dockerHost)) ?? given
         if (gid === null) throw new HttpError(400, 'The Docker socket group id could not be read here. Enter it under Docker group id: run stat -c %g /var/run/docker.sock on the VPS.')
         if (await step('GET', '/containers/json', 200, () => containerByName(env.dockerHost, TELEGRAM_NAME))) throw new HttpError(409, `Container ${TELEGRAM_NAME} already exists`)
         if (await step('GET', '/api/stacks', 200, () => findStack(portainer, TELEGRAM_NAME))) throw new HttpError(409, `Stack ${TELEGRAM_NAME} already exists. Remove it in Portainer to deploy again.`)
@@ -1070,9 +1072,7 @@ export const routes = {
         try {
           await step('POST', '/api/stacks/create/standalone/string', 200, () => createStack(portainer, TELEGRAM_NAME, telegramEnv(token, gid, cpuset), TELEGRAM_STACK_FILE))
         } catch (e) {
-          // a lost answer can still mean a created stack: then the deploy is done, and calling it failed would only make the next try a 409
-          if (!(await step('GET', '/api/stacks', 200, () => findStack(portainer, TELEGRAM_NAME)).catch(() => null))) throw e
-          warning = lostCreate(e)
+          warning = await afterFailedCreate(e, calls, () => findStack(portainer, TELEGRAM_NAME))
         }
         await log(req, server, 'Deployed', TELEGRAM_NAME, { calls, ms: Date.now() - started, ...(warning && { note: warning }) })
         return json({ bot, calls, ...(warning && { warning }) }, 201)

@@ -78,7 +78,7 @@ test('telegram deploy with a malformed token answers 400 before calling Telegram
   expect(((await res.json()) as { error: string }).error).toBe('token must be the one @BotFather gave, like 123456789:AAH…')
 })
 
-test('telegram deploy with a typed Docker group id that is not a whole number answers 400 before calling Telegram', async () => {
+test('telegram deploy with a typed Docker group id that is not a whole number answers 400 before calling Telegram when the socket group cannot be read', async () => {
   for (const dockerGid of ['abc', -1, 1.5, false, [], ' ']) {
     const res = await fetch(`${base}/api/telegram/deploy`, { method: 'POST', headers: { cookie: session, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: JSON.stringify({ token: '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw', dockerGid }) })
     expect(res.status).toBe(400)
@@ -607,6 +607,28 @@ test('remove: refuses a non-stack container and a second remove, then deletes th
   } finally {
     dockerFake = null
     portainerFake = null
+  }
+})
+
+test('a container removed between the lookup and the inspect reads as not deployed in /api/system and /api/telegram instead of failing them', async () => {
+  dockerFake = (req) => {
+    const u = new URL(req.url)
+    if (u.pathname === '/containers/json') {
+      const name = (JSON.parse(u.searchParams.get('filters') ?? '{}') as { name?: string[] }).name?.[0]?.slice(2, -1) ?? ''
+      return Response.json([{ Id: `gone-${name}`, Names: [`/${name}`], State: 'running', Image: 'x' }])
+    }
+    if (u.pathname.startsWith('/containers/gone-')) return new Response('no such container', { status: 404 })
+    return new Response('down', { status: 500 })
+  }
+  try {
+    const sys = await fetch(`${base}/api/system`, { headers: { cookie: session } })
+    expect(sys.status).toBe(200)
+    expect((await sys.json()) as Record<string, unknown>).toMatchObject({ dashboard: { deployed: false }, telegram: { deployed: false }, collector: { deployed: false } })
+    const tg = await fetch(`${base}/api/telegram`, { headers: { cookie: session } })
+    expect(tg.status).toBe(200)
+    expect(await tg.json()).toMatchObject({ deployed: false })
+  } finally {
+    dockerFake = null
   }
 })
 

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 /// Microseconds of CPU time per jiffy (USER_HZ is 100 on Linux).
 const USEC_PER_JIFFY: u64 = 10_000;
 const NAMES_EVERY: Duration = Duration::from_secs(10);
-/// How long an id Docker did not list is not asked about again (the 10 s refresh still runs).
+/// How long an id Docker did not list twice in a row is not asked about again (the 10 s refresh still runs).
 const MISS_FOR: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -82,7 +82,8 @@ pub struct Sampler {
     prev: Option<Raw>,
     names: HashMap<String, ContainerInfo>,
     names_at: Option<Instant>,
-    misses: HashMap<String, Instant>,
+    /// None after a first miss (asked again on the next tick: Docker can list a container a moment after its cgroup appears), the time of a repeat miss after that
+    misses: HashMap<String, Option<Instant>>,
     walker: procs::Walker,
     cfg: SamplerCfg,
 }
@@ -96,10 +97,10 @@ impl Sampler {
         Sampler { prev: None, names: HashMap::new(), names_at: None, misses: HashMap::new(), walker: procs::Walker::default(), cfg }
     }
 
-    /// Refreshes the id → name map every 10 s or when a cgroup id is unknown and was not missed in the last minute; a failed refresh keeps the old map, and a name stays while its cgroup still exists.
+    /// Refreshes the id → name map every 10 s or when a cgroup id is unknown and was not missed twice in a row in the last minute; a failed refresh keeps the old map, and a name stays while its cgroup still exists.
     fn refresh_names(&mut self, cgs: &[CgRaw]) {
         let due = self.names_at.is_none_or(|t| t.elapsed() >= NAMES_EVERY);
-        let known = |id: &String| self.names.contains_key(id) || self.misses.get(id).is_some_and(|t| t.elapsed() < MISS_FOR);
+        let known = |id: &String| self.names.contains_key(id) || self.misses.get(id).is_some_and(|t| t.is_some_and(|t| t.elapsed() < MISS_FOR));
         if !due && cgs.iter().all(|c| known(&c.id)) {
             return;
         }
@@ -114,7 +115,8 @@ impl Sampler {
             }
             self.names = names;
         }
-        self.misses = cgs.iter().filter(|c| !self.names.contains_key(&c.id)).map(|c| (c.id.clone(), now)).collect();
+        let before = std::mem::take(&mut self.misses);
+        self.misses = cgs.iter().filter(|c| !self.names.contains_key(&c.id)).map(|c| (c.id.clone(), before.contains_key(&c.id).then_some(now))).collect();
     }
 
     /// Reads one sample; `None` on the first call (no deltas yet) or when the host files cannot be read.
@@ -215,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn an_id_docker_does_not_know_is_asked_again_only_after_a_minute() {
+    fn an_id_docker_does_not_know_twice_is_asked_again_only_after_a_minute() {
         use std::io::{Read, Write};
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
@@ -235,11 +237,13 @@ mod tests {
         let cgs = vec![CgRaw { id: "f".repeat(64), cpu_usec: 0, mem_current: 0, inactive_file: 0, mem_max: None }];
         s.refresh_names(&cgs);
         s.refresh_names(&cgs);
-        assert_eq!(asked.load(Ordering::SeqCst), 1, "the miss is remembered");
-        let old = Instant::now().checked_sub(Duration::from_secs(61)).unwrap();
-        s.misses.values_mut().for_each(|t| *t = old);
+        assert_eq!(asked.load(Ordering::SeqCst), 2, "a first miss is asked again on the next tick");
         s.refresh_names(&cgs);
-        assert_eq!(asked.load(Ordering::SeqCst), 2, "asked again after a minute");
+        assert_eq!(asked.load(Ordering::SeqCst), 2, "a repeat miss is remembered");
+        let old = Instant::now().checked_sub(Duration::from_secs(61)).unwrap();
+        s.misses.values_mut().for_each(|t| *t = Some(old));
+        s.refresh_names(&cgs);
+        assert_eq!(asked.load(Ordering::SeqCst), 3, "asked again after a minute");
         fs::remove_dir_all(d).unwrap();
     }
 

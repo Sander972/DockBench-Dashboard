@@ -8,6 +8,13 @@ export function checkSessionSecret(v: string): string {
   return v
 }
 
+// constant-time string compare by bytes: timingSafeEqual throws on a byte-length mismatch, which a non-ASCII string of the right length would cause
+export function safeEqual(a: string, b: string): boolean {
+  const x = Buffer.from(a)
+  const y = Buffer.from(b)
+  return x.length === y.length && timingSafeEqual(x, y)
+}
+
 function sign(secret: string, payload: string): string {
   return createHmac('sha256', secret).update(payload).digest('hex')
 }
@@ -22,10 +29,6 @@ export function verifySession(secret: string, cookie: string | undefined | null,
   if (!cookie) return false
   const [iat, exp, sig] = cookie.split('.')
   if (!iat || !exp || !sig) return false
-  const expected = sign(secret, `${iat}.${exp}`)
-  const got = Buffer.from(sig)
-  const want = Buffer.from(expected)
-  // timingSafeEqual throws on a byte-length mismatch, which a non-ASCII signature of the right string length would cause
-  if (got.length !== want.length || !timingSafeEqual(got, want)) return false
+  if (!safeEqual(sig, sign(secret, `${iat}.${exp}`))) return false
   return Number(exp) > now
 }
