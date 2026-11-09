@@ -15,7 +15,7 @@ test('device code and fatal line come from the newest log lines', () => {
 test('status is starting until the first answer, dead when it stops answering, starting again after a restart', async () => {
   let answer: () => Promise<DevContainerStatus> = () => Promise.reject(new Error('refused'))
   let calls = 0
-  const view = statusTracker(() => (calls++, answer()), 20)
+  const view = statusTracker(() => (calls++, answer()), 20, 0)
 
   expect((await view('a', 'x', 't1', true)).statusError).toBe('starting')
   answer = async () => st
@@ -37,10 +37,29 @@ test('status is starting until the first answer, dead when it stops answering, s
   expect((await view('a', 'x', 't2', true)).statusError).toBe('starting')
 })
 
+test('/status is asked at most once per minMs, at once after a restart', async () => {
+  let calls = 0
+  const view = statusTracker(async () => (calls++, st), 20, 60)
+  await view('a', 'x', 't1', true)
+  await view('a', 'x', 't1', true)
+  expect(calls).toBe(1)
+  await Bun.sleep(70)
+  expect((await view('a', 'x', 't1', true)).statusError).toBeNull()
+  expect(calls).toBe(2)
+  // a restart asks at once, whatever the interval; a failure counts as a request too
+  let fail = true
+  const flaky = statusTracker(() => (calls++, fail ? Promise.reject(new Error('refused')) : Promise.resolve(st)), 20, 60)
+  await flaky('b', 'y', 't1', true)
+  fail = false
+  expect((await flaky('b', 'y', 't1', true)).statusError).toBe('starting')
+  expect((await flaky('b', 'y', 't2', true)).statusError).toBeNull()
+  expect(calls).toBe(4)
+})
+
 test('a slow /status is never asked twice at once', async () => {
   let calls = 0
   let release!: (s: DevContainerStatus) => void
-  const view = statusTracker(() => (calls++, new Promise((r) => (release = r))), 10)
+  const view = statusTracker(() => (calls++, new Promise((r) => (release = r))), 10, 0)
   expect((await view('a', 'x', 't', true)).statusError).toBe('starting')
   expect((await view('a', 'x', 't', true)).statusError).toBe('starting')
   expect(calls).toBe(1)

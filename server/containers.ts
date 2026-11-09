@@ -48,25 +48,27 @@ interface Track {
   answered: boolean
   failed: boolean
   inflight: Promise<void> | null
+  /** performance.now() when the last request settled; 0 asks at once */
+  settled: number
 }
 
-// One /status request per container at a time, whatever the number of tabs polling: the status server is single-threaded and can take 30 s. A poll waits up to waitMs for the answer, otherwise it reports what is known and the request carries on for the next poll. "starting" until /status answers once since the container (re)started, "dead" when it answered before and fails now. ponytail: in memory, so after a dashboard restart a dead status server shows as starting.
-export function statusTracker(fetchStatus: (name: string) => Promise<DevContainerStatus>, waitMs = 2000) {
+// One /status request per container at a time, whatever the number of tabs polling, and none sooner than minMs after the last one settled: the 2 s live tick would otherwise ask every container on every tick for facts (branch, dirty count, tunnel) that change over seconds. A poll waits up to waitMs for the answer, otherwise it reports what is known and the request carries on for the next poll. "starting" until /status answers once since the container (re)started (a restart asks at once), "dead" when it answered before and fails now. ponytail: in memory, so after a dashboard restart a dead status server shows as starting.
+export function statusTracker(fetchStatus: (name: string) => Promise<DevContainerStatus>, waitMs = 2000, minMs = 5000) {
   const tracks = new Map<string, Track>()
   return async function view(id: string, name: string, startedAt: string, running: boolean): Promise<StatusView> {
     let t = tracks.get(id)
-    if (t && running && t.startedAt !== startedAt) t = { ...t, startedAt, answered: false, failed: false, inflight: null }
-    if (!t) t = { startedAt, status: null, fetchedAt: null, answered: false, failed: false, inflight: null }
+    if (t && running && t.startedAt !== startedAt) t = { ...t, startedAt, answered: false, failed: false, inflight: null, settled: 0 }
+    if (!t) t = { startedAt, status: null, fetchedAt: null, answered: false, failed: false, inflight: null, settled: 0 }
     tracks.set(id, t)
     const track = t
     if (running) {
-      if (!track.inflight) {
+      if (!track.inflight && (track.settled === 0 || performance.now() - track.settled >= minMs)) {
         track.inflight = fetchStatus(name).then(
           (s) => { track.status = s; track.fetchedAt = new Date().toISOString(); track.answered = true; track.failed = false },
           () => { track.failed = true },
-        ).finally(() => { track.inflight = null })
+        ).finally(() => { track.inflight = null; track.settled = performance.now() })
       }
-      await Promise.race([track.inflight, Bun.sleep(waitMs)])
+      if (track.inflight) await Promise.race([track.inflight, Bun.sleep(waitMs)])
     }
     const statusError = !running ? null : !track.answered ? 'starting' : track.failed ? 'dead' : null
     return { status: track.status, statusError, statusFetchedAt: track.fetchedAt }
