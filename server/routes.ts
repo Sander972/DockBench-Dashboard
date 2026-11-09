@@ -11,7 +11,7 @@ import { createLive } from './live'
 import { containerByName, containerLogs, containerPost, dockerInfo, execRun, imageInspect, inspectContainer, listDockbench, removeContainer, removeVolume, stackVolumes, systemDf } from './docker'
 import { diskUsage } from './host'
 import { createCollector, history as collectorHistory, WINDOWS, type Window } from './collector'
-import { createStack, deleteStack, findStack, fromStackFile, patchEnv, pullImage, putStack, readStack, redeployStack, STACK_FILE, stackEnv, TELEGRAM_STACK_FILE, vscodeEnv } from './portainer'
+import { cpusetFor, createStack, deleteStack, findStack, fromStackFile, patchEnv, pullImage, putStack, readStack, redeployStack, STACK_FILE, stackEnv, TELEGRAM_STACK_FILE, vscodeEnv } from './portainer'
 import { deploy, DeployFailure, REPO_RE, validateDeploy } from './deploy'
 import { deleteKeys, keyTitle, removeStack, stackKeys } from './remove'
 import { generateDeployKey } from './sshkey'
@@ -678,7 +678,7 @@ export const routes = {
     }),
   },
 
-  // UpdateResult in src/types.ts, plus `warning` when the old config key could not be removed. Body { installClaude, injectClaudeConfig, vscodeConfig }, strict booleans: rewrites the container's stack variables and recreates it from the current STACK_FILE (home volume kept) on the image its tag points to here, so a newer image the 30-minute check already pulled comes along. Turning the Claude config on adds a read-only deploy key on the config repo from Settings; turning it off removes it. Turning VS Code settings on takes the current global ones, written by the container only on a home volume without Machine settings; they stay as they are while that option does not change. The same options on the same image answer 409, since compose would recreate nothing.
+  // UpdateResult in src/types.ts, plus `warning` when the old config key could not be removed. Body { installClaude, injectClaudeConfig, vscodeConfig }, strict booleans: rewrites the container's stack variables and recreates it from the current STACK_FILE (home volume kept) on the image its tag points to here, so a newer image the 30-minute check already pulled comes along. Turning the Claude config on adds a read-only deploy key on the config repo from Settings; turning it off removes it. Turning VS Code settings on takes the current global ones, written by the container only on a home volume without Machine settings; they stay as they are while that option does not change. The re-PUT also sets CPUSET from the host's core count, so a stack from before the CPU reserve is recreated on it even when no option changed. The same options on the same image answer 409, since compose would recreate nothing.
   '/api/containers/:id/config': {
     POST: auth(async (req: BunRequest<'/api/containers/:id/config'>, server) => {
       server.timeout(req, 0)
@@ -710,6 +710,7 @@ export const routes = {
           const oldValue = cur.get('CLAUDE_CONFIG_REPO') ?? ''
           const oldRepo = normalizeRepo(oldValue)
           const patch = [{ name: 'INSTALL_CLAUDE', value: b.installClaude ? '1' : '0' }]
+          patch.push({ name: 'CPUSET', value: cpusetFor((await info().catch(() => null))?.ncpu ?? 0) })
           // the settings the stack carries change only with its VS Code option, so toggling another option keeps them
           if (b.vscodeConfig !== (cur.get('VSCODE_CONFIG') !== '0')) patch.push(...vscodeEnv(b.vscodeConfig as boolean, settings.vscodeSettings))
           if (b.injectClaudeConfig && !oldValue) {
@@ -987,6 +988,7 @@ export const routes = {
       try {
         const key = ghLogin ? null : generateDeployKey()
         const configKey = configRepo ? generateDeployKey() : null
+        const cpuset = cpusetFor((await info().catch(() => null))?.ncpu ?? 0)
         const result = await deploy(project, repo, {
           listContainers: () => listDockbench(env.dockerHost),
           findStack: (name) => findStack(portainer, name),
@@ -997,7 +999,7 @@ export const routes = {
           }),
           createConfigKey: () => createDeployKey(a.token, configRepo, `dockbench-${project}`, configKey!.publicKey, true),
           deleteConfigKey: (id) => deleteDeployKey(a.token, configRepo, id),
-          createStack: (name) => createStack(portainer, name, stackEnv({ project, repo, image, sshKey: key?.privateKeyBase64 ?? '', gitUserName, gitUserEmail, installClaude, setupRerun, claudeConfigRepo: configRepo, claudeConfigKey: configKey?.privateKeyBase64 ?? '', vscodeConfig, vscodeSettings: settings.vscodeSettings })),
+          createStack: (name) => createStack(portainer, name, stackEnv({ project, repo, image, sshKey: key?.privateKeyBase64 ?? '', gitUserName, gitUserEmail, installClaude, setupRerun, claudeConfigRepo: configRepo, claudeConfigKey: configKey?.privateKeyBase64 ?? '', vscodeConfig, vscodeSettings: settings.vscodeSettings, cpuset })),
         }, configRepo)
         await log(req, server, 'Deployed', result.name, { calls: result.calls, ms: Date.now() - started })
         return json(result, 201)
@@ -1044,7 +1046,8 @@ export const routes = {
         if (await step('GET', '/containers/json', 200, () => containerByName(env.dockerHost, TELEGRAM_NAME))) throw new HttpError(409, `Container ${TELEGRAM_NAME} already exists`)
         if (await step('GET', '/api/stacks', 200, () => findStack(portainer, TELEGRAM_NAME))) throw new HttpError(409, `Stack ${TELEGRAM_NAME} already exists. Remove it in Portainer to deploy again.`)
         await step('POST', '/images/create', 200, () => pullImage(portainer, TELEGRAM_IMAGE))
-        await step('POST', '/api/stacks/create/standalone/string', 200, () => createStack(portainer, TELEGRAM_NAME, telegramEnv(token, gid), TELEGRAM_STACK_FILE))
+        const cpuset = cpusetFor((await info().catch(() => null))?.ncpu ?? 0)
+        await step('POST', '/api/stacks/create/standalone/string', 200, () => createStack(portainer, TELEGRAM_NAME, telegramEnv(token, gid, cpuset), TELEGRAM_STACK_FILE))
         await log(req, server, 'Deployed', TELEGRAM_NAME, { calls, ms: Date.now() - started })
         return json({ bot, calls }, 201)
       } catch (e) {

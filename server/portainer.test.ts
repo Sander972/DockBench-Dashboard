@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { fromStackFile, patchEnv, pullImage, STACK_FILE, TELEGRAM_STACK_FILE, stackEnv } from './portainer'
+import { cpusetFor, fromStackFile, patchEnv, pullImage, STACK_FILE, TELEGRAM_STACK_FILE, stackEnv } from './portainer'
 import { telegramEnv } from './telegram'
 
 test('pullImage goes through the Portainer Docker proxy with the registryId of the matching registry only', async () => {
@@ -26,29 +26,30 @@ test('pullImage goes through the Portainer Docker proxy with the registryId of t
 })
 
 test('stackEnv sets every variable the compose file reads, with an ssh clone URL and the deploy key', () => {
-  const env = stackEnv({ project: 'shop', repo: 'octocat/shop', image: 'ghcr.io/sander972/dockbench:latest', sshKey: 'LS0tCg==', gitUserName: 'Mona', gitUserEmail: 'a@b.c', installClaude: true, setupRerun: true, claudeConfigRepo: 'octocat/claude-config', claudeConfigKey: 'LS0tCh==', vscodeConfig: true, vscodeSettings: '{ "workbench.colorTheme": "Default Dark Modern" }' })
+  const env = stackEnv({ project: 'shop', repo: 'octocat/shop', image: 'ghcr.io/sander972/dockbench:latest', sshKey: 'LS0tCg==', gitUserName: 'Mona', gitUserEmail: 'a@b.c', installClaude: true, setupRerun: true, claudeConfigRepo: 'octocat/claude-config', claudeConfigKey: 'LS0tCh==', vscodeConfig: true, vscodeSettings: '{ "workbench.colorTheme": "Default Dark Modern" }', cpuset: '1-3' })
   const byName = Object.fromEntries(env.map((e) => [e.name, e.value]))
   expect(byName).toEqual({
     PROJECT: 'shop', REPO_URL: 'git@github.com:octocat/shop.git', DOCKBENCH_IMAGE: 'ghcr.io/sander972/dockbench:latest', SSH_KEY: 'LS0tCg==', GIT_USER_NAME: 'Mona', GIT_USER_EMAIL: 'a@b.c', SETUP_RERUN: '1',
     INSTALL_CLAUDE: '1', CLAUDE_CONFIG_REPO: 'git@github.com:octocat/claude-config.git', CLAUDE_CONFIG_KEY: 'LS0tCh==',
     VSCODE_CONFIG: '1', VSCODE_SETTINGS: Buffer.from('{ "workbench.colorTheme": "Default Dark Modern" }').toString('base64'),
+    CPUSET: '1-3',
   })
   for (const name of Object.keys(byName)) expect(STACK_FILE).toContain(`\${${name}`)
   expect(STACK_FILE).not.toContain('GITHUB_TOKEN')
 })
 
 test('stackEnv without a deploy key (ghLogin): empty SSH_KEY and an https clone URL for gh', () => {
-  const env = stackEnv({ project: 'shop', repo: 'octocat/shop', image: 'i', sshKey: '', gitUserName: 'Mona', gitUserEmail: 'a@b.c', installClaude: true, setupRerun: false, claudeConfigRepo: '', claudeConfigKey: '', vscodeConfig: false, vscodeSettings: '' })
+  const env = stackEnv({ project: 'shop', repo: 'octocat/shop', image: 'i', sshKey: '', gitUserName: 'Mona', gitUserEmail: 'a@b.c', installClaude: true, setupRerun: false, claudeConfigRepo: '', claudeConfigKey: '', vscodeConfig: false, vscodeSettings: '', cpuset: '' })
   expect(Object.fromEntries(env.map((e) => [e.name, e.value]))).toMatchObject({ REPO_URL: 'https://github.com/octocat/shop.git', SSH_KEY: '' })
 })
 
 test('stackEnv without Claude: INSTALL_CLAUDE 0 and empty config variables', () => {
-  const env = stackEnv({ project: 'shop', repo: 'octocat/shop', image: 'i', sshKey: 'k', gitUserName: 'Mona', gitUserEmail: 'a@b.c', installClaude: false, setupRerun: false, claudeConfigRepo: '', claudeConfigKey: '', vscodeConfig: false, vscodeSettings: '{}' })
+  const env = stackEnv({ project: 'shop', repo: 'octocat/shop', image: 'i', sshKey: 'k', gitUserName: 'Mona', gitUserEmail: 'a@b.c', installClaude: false, setupRerun: false, claudeConfigRepo: '', claudeConfigKey: '', vscodeConfig: false, vscodeSettings: '{}', cpuset: '' })
   expect(Object.fromEntries(env.map((e) => [e.name, e.value]))).toMatchObject({ SETUP_RERUN: '0', INSTALL_CLAUDE: '0', CLAUDE_CONFIG_REPO: '', CLAUDE_CONFIG_KEY: '', VSCODE_CONFIG: '0', VSCODE_SETTINGS: '' })
 })
 
 test('fromStackFile accepts deploy-key and ghLogin stacks, refuses GITHUB_TOKEN and hand-made ones', () => {
-  const base = { project: 'p', repo: 'o/r', image: 'ghcr.io/x/dockbench:latest', gitUserName: 'n', gitUserEmail: 'e', installClaude: true, setupRerun: false, claudeConfigRepo: '', claudeConfigKey: '', vscodeConfig: true, vscodeSettings: '' }
+  const base = { project: 'p', repo: 'o/r', image: 'ghcr.io/x/dockbench:latest', gitUserName: 'n', gitUserEmail: 'e', installClaude: true, setupRerun: false, claudeConfigRepo: '', claudeConfigKey: '', vscodeConfig: true, vscodeSettings: '', cpuset: '' }
   expect(fromStackFile(stackEnv({ ...base, sshKey: 'a2V5' }))).toBe(true)
   expect(fromStackFile(stackEnv({ ...base, sshKey: '' }))).toBe(true)
   // the first dashboard's STACK_FILE: DOCKBENCH_IMAGE plus GITHUB_TOKEN, no SSH_KEY
@@ -71,10 +72,19 @@ test('stack file keeps the DockBench contract', () => {
   expect(STACK_FILE).toContain('- home:/home/dev')
   expect(STACK_FILE).toContain('- devnet')
   expect(STACK_FILE).toContain('- proxy')
+  expect(STACK_FILE).toContain('cpuset: ${CPUSET:-}')
+})
+
+test('cpusetFor leaves core 0 to the host and gives up below 2 cores', () => {
+  expect(cpusetFor(4)).toBe('1-3')
+  expect(cpusetFor(2)).toBe('1')
+  expect(cpusetFor(1)).toBe('')
+  expect(cpusetFor(0)).toBe('')
 })
 
 test('Telegram stack file reads every variable telegramEnv sets and keeps the bot contract', () => {
-  for (const { name } of telegramEnv('1:x', 1)) expect(TELEGRAM_STACK_FILE).toContain(`\${${name}}`)
+  for (const { name } of telegramEnv('1:x', 1, '1-3')) expect(TELEGRAM_STACK_FILE).toContain(`\${${name}`)
+  expect(TELEGRAM_STACK_FILE).toContain('cpuset: ${CPUSET:-}')
   expect(TELEGRAM_STACK_FILE).toContain('image: ghcr.io/sander972/dockbench-telegram:latest')
   expect(TELEGRAM_STACK_FILE).toContain('container_name: dockbench-telegram')
   expect(TELEGRAM_STACK_FILE).toContain('/var/run/docker.sock:/var/run/docker.sock')

@@ -21,8 +21,8 @@ test('setupCode takes the newest code when several boots printed one', () => {
   expect(setupCode([])).toBeNull()
 })
 
-test('telegramEnv sets the token and the socket group', () => {
-  expect(telegramEnv(TOKEN, 999)).toEqual([{ name: 'TELEGRAM_BOT_TOKEN', value: TOKEN }, { name: 'DOCKER_GID', value: '999' }])
+test('telegramEnv sets the token, the socket group and the cpuset', () => {
+  expect(telegramEnv(TOKEN, 999, '1-3')).toEqual([{ name: 'TELEGRAM_BOT_TOKEN', value: TOKEN }, { name: 'DOCKER_GID', value: '999' }, { name: 'CPUSET', value: '1-3' }])
 })
 
 test('getMe answers the username and never leaks the token in an error', async () => {

@@ -51,8 +51,8 @@ export function setupCode(lines: string[]): string | null {
   return null
 }
 
-export function telegramEnv(token: string, gid: number): { name: string; value: string }[] {
-  return [{ name: 'TELEGRAM_BOT_TOKEN', value: token }, { name: 'DOCKER_GID', value: String(gid) }]
+export function telegramEnv(token: string, gid: number, cpuset: string): { name: string; value: string }[] {
+  return [{ name: 'TELEGRAM_BOT_TOKEN', value: token }, { name: 'DOCKER_GID', value: String(gid) }, { name: 'CPUSET', value: cpuset }]
 }
 
 // GET /status of the bot

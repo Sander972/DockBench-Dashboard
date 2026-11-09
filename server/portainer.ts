@@ -7,6 +7,8 @@ export const STACK_FILE = `services:
     container_name: dockbench-\${PROJECT}
     hostname: dockbench-\${PROJECT}
     init: true
+    # cores this container may run on; the dashboard sets 1-(N-1) so core 0 stays free for the host, empty means every core
+    cpuset: \${CPUSET:-}
     environment:
       REPO_URL: \${REPO_URL}
       TUNNEL_NAME: \${PROJECT}
@@ -44,6 +46,8 @@ export const TELEGRAM_STACK_FILE = `services:
     image: ghcr.io/sander972/dockbench-telegram:latest
     container_name: dockbench-telegram
     init: true
+    # cores this container may run on; the dashboard sets 1-(N-1) so core 0 stays free for the host, empty means every core
+    cpuset: \${CPUSET:-}
     environment:
       TELEGRAM_BOT_TOKEN: \${TELEGRAM_BOT_TOKEN}
       TELEGRAM_GROUP_ID: \${TELEGRAM_GROUP_ID:-}
@@ -80,6 +84,7 @@ export interface StackInput {
   claudeConfigKey: string
   vscodeConfig: boolean
   vscodeSettings: string // settings.json text, '' lets the image seed its own
+  cpuset: string // cpusetFor the host, '' for every core
 }
 
 // VS Code settings for the stack: the container writes them once, on a home volume without Machine settings
@@ -101,7 +106,14 @@ export function stackEnv(i: StackInput): { name: string; value: string }[] {
     { name: 'GIT_USER_EMAIL', value: i.gitUserEmail },
     { name: 'SETUP_RERUN', value: i.setupRerun ? '1' : '0' },
     ...vscodeEnv(i.vscodeConfig, i.vscodeSettings),
+    { name: 'CPUSET', value: i.cpuset },
   ]
+}
+
+// the cores a deployed container may use: every core but 0, which stays free for the host; '' (no restriction) when the count is unknown or there is nothing to spare
+export function cpusetFor(ncpu: number): string {
+  if (ncpu < 2) return ''
+  return ncpu === 2 ? '1' : `1-${ncpu - 1}`
 }
 
 // true when a stack's variables can be rewritten under the current STACK_FILE without losing git access: it passes SSH_KEY (empty on a ghLogin stack) and DOCKBENCH_IMAGE but never GITHUB_TOKEN, so a stack made by hand or by the first dashboard that signs in with GITHUB_TOKEN is refused
