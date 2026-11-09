@@ -43,14 +43,11 @@ export interface StatusView {
 
 interface Track {
   startedAt: string | null
-  // up longer than the start grace when first seen (the dashboard restarted under it): two failed requests in a row mean dead, not starting
-  old: boolean
   // failed requests in a row
   fails: number
   status: DevContainerStatus | null
   fetchedAt: string | null
   answered: boolean
-  failed: boolean
   inflight: Promise<void> | null
   /** performance.now() when the last request settled; 0 asks at once */
   settled: number
@@ -59,25 +56,26 @@ interface Track {
 // the status server starts after the Claude Code install or update, the clone and mise install, which take minutes on a first start
 const START_GRACE_MS = 15 * 60_000
 
-// One /status request per container at a time, whatever the number of tabs polling, and none sooner than minMs after the last one settled: the 2 s live tick would otherwise ask every container on every tick for facts (branch, dirty count, tunnel) that change over seconds. A poll waits up to waitMs for the answer, otherwise it reports what is known and the request carries on for the next poll. "starting" until /status answers once since the container (re)started (a restart asks at once), "dead" when it answered before and fails now, or when its first two requests fail on a container that was up longer than graceMs when first seen (the tracker is in memory, so after a dashboard restart a dead status server would otherwise show as starting; one timeout while the restarted dashboard asks every container at once is not enough).
+// One /status request per container at a time, whatever the number of tabs polling, and none sooner than minMs after the last one settled: the 2 s live tick would otherwise ask every container on every tick for facts (branch, dirty count, tunnel) that change over seconds. A poll waits up to waitMs for the answer, otherwise it reports what is known and the request carries on for the next poll. "starting" until /status answers once since the container (re)started (a restart asks at once), "dead" when it answered before and fails now, or when it never answered and its last two requests failed on a container up longer than graceMs, checked on every view (a status server that never comes up, or one that died before a dashboard restart: the tracker is in memory; one timeout while the restarted dashboard asks every container at once is not enough).
 export function statusTracker(fetchStatus: (name: string) => Promise<DevContainerStatus>, waitMs = 2000, minMs = 5000, graceMs = START_GRACE_MS) {
   const tracks = new Map<string, Track>()
   return async function view(id: string, name: string, startedAt: string | null, running: boolean): Promise<StatusView> {
     let t = tracks.get(id)
-    if (t && running && t.startedAt !== startedAt) t = { ...t, startedAt, old: false, fails: 0, answered: false, failed: false, inflight: null, settled: 0 }
-    if (!t) t = { startedAt, old: !!startedAt && Date.now() - Date.parse(startedAt) > graceMs, fails: 0, status: null, fetchedAt: null, answered: false, failed: false, inflight: null, settled: 0 }
+    if (t && running && t.startedAt !== startedAt) t = { ...t, startedAt, fails: 0, answered: false, inflight: null, settled: 0 }
+    if (!t) t = { startedAt, fails: 0, status: null, fetchedAt: null, answered: false, inflight: null, settled: 0 }
     tracks.set(id, t)
     const track = t
     if (running) {
       if (!track.inflight && (track.settled === 0 || performance.now() - track.settled >= minMs)) {
         track.inflight = fetchStatus(name).then(
-          (s) => { track.status = s; track.fetchedAt = new Date().toISOString(); track.answered = true; track.failed = false; track.fails = 0 },
-          () => { track.failed = true; track.fails++ },
+          (s) => { track.status = s; track.fetchedAt = new Date().toISOString(); track.answered = true; track.fails = 0 },
+          () => { track.fails++ },
         ).finally(() => { track.inflight = null; track.settled = performance.now() })
       }
       if (track.inflight) await Promise.race([track.inflight, Bun.sleep(waitMs)])
     }
-    const statusError = !running ? null : track.failed && (track.answered || (track.old && track.fails >= 2)) ? 'dead' : !track.answered ? 'starting' : null
+    const pastGrace = !!track.startedAt && Date.now() - Date.parse(track.startedAt) > graceMs
+    const statusError = !running ? null : track.answered ? (track.fails > 0 ? 'dead' : null) : pastGrace && track.fails >= 2 ? 'dead' : 'starting'
     return { status: track.status, statusError, statusFetchedAt: track.fetchedAt }
   }
 }

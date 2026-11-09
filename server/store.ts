@@ -38,9 +38,9 @@ export async function writeAccount(dataDir: string, account: Account): Promise<v
   await Bun.write(`${dataDir}/github.json`, JSON.stringify(account))
 }
 
-// the unauthenticated OAuth callback writes events too, so the log is capped: past maxBytes it moves to activity.jsonl.1 (replacing the previous one) and starts again. Writes run one at a time, or two appends crossing the cap together would both rotate and the second would move a one-line file over the rotated one.
+// the unauthenticated OAuth callback writes events too, so the log is capped: past maxBytes it moves to activity.jsonl.1 (replacing the previous one) and starts again. Writes run one at a time, or two appends crossing the cap together would both rotate and the second would move a one-line file over the rotated one. The next write waits at most stallMs for the one before, so a stalled disk hangs only the request whose write stalled, not every later one.
 let appends: Promise<unknown> = Promise.resolve()
-export function appendEvent(dataDir: string, event: ActivityEvent, maxBytes = 5 * 1024 * 1024): Promise<void> {
+export function appendEvent(dataDir: string, event: ActivityEvent, maxBytes = 5 * 1024 * 1024, stallMs = 5000): Promise<void> {
   const run = appends.then(async () => {
     await mkdir(dataDir, { recursive: true })
     const path = `${dataDir}/activity.jsonl`
@@ -48,15 +48,15 @@ export function appendEvent(dataDir: string, event: ActivityEvent, maxBytes = 5 
     if ((await stat(path).then((s) => s.size, () => 0)) + Buffer.byteLength(line) > maxBytes) await rename(path, `${path}.1`).catch(() => {})
     await appendFile(path, line)
   })
-  appends = run.catch(() => {})
+  appends = Promise.race([run, Bun.sleep(stallMs)]).catch(() => {})
   return run
 }
 
-// reads only the newest file, so the feed is short right after a rotation; at most 5 MB per request
+// newest first; when the newest file holds fewer than limit events (right after a rotation) the rotated one tops it up, so at most 10 MB per request
 export async function readEvents(dataDir: string, limit = 200): Promise<ActivityEvent[]> {
-  const f = Bun.file(`${dataDir}/activity.jsonl`)
-  if (!(await f.exists())) return []
-  const lines = (await f.text()).split('\n').filter(Boolean)
+  const read = async (path: string) => { const f = Bun.file(path); return (await f.exists()) ? (await f.text()).split('\n').filter(Boolean) : [] }
+  let lines = await read(`${dataDir}/activity.jsonl`)
+  if (lines.length < limit) lines = [...(await read(`${dataDir}/activity.jsonl.1`)), ...lines]
   return lines.slice(-limit).reverse().map((l) => JSON.parse(l) as ActivityEvent)
 }
 

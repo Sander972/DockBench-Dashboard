@@ -9,7 +9,7 @@ import StepUpPanel from '../components/StepUpPanel.vue'
 
 const now = useNow()
 const t = computed(() => store.telegram)
-const rows = computed(() => (t.value?.deployed ? botRows(t.value, now.value, store.tg.loadError) : []))
+const rows = computed(() => (t.value?.deployed ? botRows(t.value, now.value, store.tg.loadError, store.tg.receivedAt) : []))
 const bot = computed(() => t.value?.status?.bot ?? '')
 const cf = computed(() => (store.confirm?.target.startsWith('telegram-') ? store.confirm : null))
 const COPY = {

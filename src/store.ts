@@ -21,8 +21,8 @@ export interface DeployRun { name: string; calls: ApiCall[]; id: string | null; 
 export interface Draft extends DeployDraft { run: DeployRun | null }
 
 export type TgOp = 'deploy' | 'claim' | 'update'
-// loadError: GET /api/telegram is failing (the page says so instead of judging the last answer), cleared by the next answer
-const newTg = () => ({ token: '', gid: '', busy: null as TgOp | null, calls: [] as ApiCall[], error: '', claim: null as TelegramClaim | null, loadError: '' })
+// loadError: GET /api/telegram is failing (the page says so instead of judging the last answer), cleared by the next answer; receivedAt: browser time the last answer arrived
+const newTg = () => ({ token: '', gid: '', busy: null as TgOp | null, calls: [] as ApiCall[], error: '', claim: null as TelegramClaim | null, loadError: '', receivedAt: 0 })
 
 // the Updates panel in Settings: the running action, its trace, and the wait for the dashboard to come back after updating itself
 export type SysOp = 'check' | 'dashboard' | 'telegram'
@@ -102,11 +102,11 @@ function fail(e: unknown) {
 
 export const attentionCount = computed(() => store.containers.filter(needsAttention).length)
 
-// newer dashboard or bot images pulled and not installed yet, for the badge on Settings
 // dev containers whose repo's CI fails on the default branch, for the badge on Actions
 export const ciFailCount = computed(() => Object.values(store.ci).filter(a => a.state === 'failure').length)
 
-export const updatesCount = computed(() => [store.system?.dashboard, store.system?.collector, store.system?.telegram].filter(r => r?.imageUpdate).length)
+// newer dashboard, collector or bot images pulled and not installed yet, for the badge on Settings; the collector installs with the dashboard, so the two count as one update
+export const updatesCount = computed(() => [store.system?.dashboard?.imageUpdate || store.system?.collector?.imageUpdate, store.system?.telegram?.imageUpdate].filter(Boolean).length)
 
 export const hostUse = computed(() => (store.host ? hostPcts(store.host) : null))
 
@@ -281,14 +281,15 @@ function setHost(host: HostUsage) {
 const asleep = () => document.hidden && !notifyOn()
 
 let liveConn: Live | null = null
-// host.polledAt of the last forced poll (server clock), so a ticker snapshot built before it is dropped; only the next snapshot is checked (later ones were built after it), so a server clock stepping back cannot drop the feed for good
-let forcedAt = 0
+// host.polledAt (server clock) of the last forced poll: every ticker snapshot built before it is dropped until one built after it arrives and clears it; a reconnect clears it too, so a server clock stepping back drops the feed at most until the watchdog reopens it. snapAt: host.polledAt of the last snapshot merged while a poll runs, so a poll's container list that a newer snapshot overtook is not merged over it
+let forcedAt = 0, snapAt = 0
 // opens the feed; snapshots go through the same merge as a poll. closed = the server refused the reconnect: a 401 signs out, anything else (the server restarting behind the proxy) leaves the feed off and the next timer tick reconnects, never checkSession(), whose afterSignIn would reconnect at once in a loop and reset the deploy draft
 export function connectLive() {
   if (liveConn || !store.session || asleep()) return
   store.live = 'connecting'
+  forcedAt = 0
   liveConn = openLive({
-    snapshot: ({ host, containers }) => { const stale = staleSnapshot(host.polledAt, forcedAt); forcedAt = 0; if (stale) return; setHost(host); merge(containers); store.loading = false; store.live = 'on' },
+    snapshot: ({ host, containers }) => { if (staleSnapshot(host.polledAt, forcedAt)) return; forcedAt = 0; snapAt = Date.parse(host.polledAt); setHost(host); merge(containers); store.loading = false; store.live = 'on' },
     down: error => { store.dockerDown = true; store.downError = error; store.lastPollAt = Date.now(); store.loading = false; store.live = 'on' },
     connecting: () => { store.live = 'connecting' },
     signedOut: () => expire(),
@@ -310,9 +311,11 @@ export function poll(opts: { force?: boolean } = {}): Promise<void> {
   if (!store.session || asleep()) return Promise.resolve()
   inFlight = (async () => {
     try {
-      // the host panel fills in as soon as /api/host answers, the container list can take longer
-      const [host, list] = await Promise.allSettled([api.getHost().then(h => { if (opts.force) forcedAt = Date.parse(h.polledAt); return setHost(h) }), api.getContainers()])
-      if (host.status === 'fulfilled' && list.status === 'fulfilled') merge(list.value)
+      // the host panel fills in as soon as /api/host answers, the container list can take longer; a snapshot built after this poll's host that landed meanwhile is newer than both
+      snapAt = 0
+      let hostAt = 0
+      const [host, list] = await Promise.allSettled([api.getHost().then(h => { hostAt = Date.parse(h.polledAt); if (opts.force) forcedAt = hostAt; return snapAt > hostAt ? h : setHost(h) }), api.getContainers()])
+      if (host.status === 'fulfilled' && list.status === 'fulfilled') { if (snapAt <= hostAt) merge(list.value) }
       else {
         const errs = [host, list].flatMap(r => (r.status === 'rejected' ? [r.reason] : []))
         if (errs.some(e => e instanceof SignedOut)) expire()
@@ -844,6 +847,7 @@ export async function loadTelegram() {
     // a restarted bot no longer knows the claim code it handed out
     if (store.telegram && store.telegram.startedAt !== t.startedAt) store.tg.claim = null
     store.telegram = t
+    store.tg.receivedAt = Date.now()
     store.tg.loadError = ''
   } catch (e) {
     if (e instanceof SignedOut) return expire()

@@ -40,7 +40,7 @@ Object.assign(process.env, {
   COLLECTOR_URL: `http://localhost:${collectorServer.port}`,
 })
 
-const { routes, testHooks } = await import('./routes')
+const { routes, info: dockerInfo } = await import('./routes')
 const { onError } = await import('./http')
 const { createSession } = await import('./session')
 const { createSessionRecord, DEFAULT_LIMITS, signCookie } = await import('./sessions')
@@ -681,7 +681,7 @@ test('dashboard update pulls the collector image too and redeploys the stack whe
 })
 
 test('config re-PUT adds CPUSET from the host core count, so an older stack gets the reserve without an option change; a matching CPUSET with nothing else changed, or an unknown core count, still answers 409', async () => {
-  testHooks.resetInfo()
+  dockerInfo.reset()
   await Bun.write(join(dir, 'github.json'), JSON.stringify({ login: 'octocat', id: 1, name: null, avatar_url: '', token: 'gho_x' }))
   const image = 'ghcr.io/x/dockbench:latest'
   const older = [{ name: 'PROJECT', value: 'shop' }, { name: 'DOCKBENCH_IMAGE', value: image }, { name: 'SSH_KEY', value: 'k' }, { name: 'INSTALL_CLAUDE', value: '1' }, { name: 'CLAUDE_CONFIG_REPO', value: '' }, { name: 'CLAUDE_CONFIG_KEY', value: '' }, { name: 'VSCODE_CONFIG', value: '1' }, { name: 'VSCODE_SETTINGS', value: '' }]
@@ -734,7 +734,7 @@ test('config re-PUT adds CPUSET from the host core count, so an older stack gets
 
 test('a dev container deploy and a Telegram deploy pass CPUSET from the host core count to the new stack', async () => {
   await Bun.write(join(dir, 'github.json'), JSON.stringify({ login: 'octocat', id: 1, name: null, avatar_url: '', token: 'gho_x' }))
-  testHooks.resetInfo()
+  dockerInfo.reset()
   const created: Record<string, { name: string; value: string }[]> = {}
   dockerFake = (req) => {
     const u = new URL(req.url)
@@ -775,7 +775,7 @@ test('a dev container deploy and a Telegram deploy pass CPUSET from the host cor
 test('config end to end: dropping the Claude config removes every duplicate key, the VS Code env is patched only on a flip, the same env answers 409', async () => {
   await Bun.write(join(dir, 'github.json'), JSON.stringify({ login: 'octocat', id: 1, name: null, avatar_url: '', token: 'gho_x' }))
   await Bun.write(join(dir, 'settings.json'), JSON.stringify({ maxDevices: 20, claudeConfigRepo: 'octocat/cfg', vscodeSettings: '{"a":1}' }))
-  testHooks.resetInfo()
+  dockerInfo.reset()
   const image = 'ghcr.io/x/dockbench:latest'
   const base0 = [{ name: 'PROJECT', value: 'cfg' }, { name: 'DOCKBENCH_IMAGE', value: image }, { name: 'SSH_KEY', value: 'k' }, { name: 'INSTALL_CLAUDE', value: '1' }, { name: 'CLAUDE_CONFIG_REPO', value: 'git@github.com:octocat/cfg.git' }, { name: 'CLAUDE_CONFIG_KEY', value: 'ck' }, { name: 'VSCODE_CONFIG', value: '1' }, { name: 'VSCODE_SETTINGS', value: 'old' }, { name: 'CPUSET', value: '1-3' }]
   let stackEnv = base0

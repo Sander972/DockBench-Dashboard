@@ -54,10 +54,11 @@ test('botName asks Telegram with the container own token, once per container, ne
   docker.stop()
 })
 
-test('parseGid takes a whole number or a digit string, reads blank as not given and anything else as invalid', () => {
+test('parseGid takes a whole number or a digit string up to 2^32 - 2, reads blank as not given and anything else as invalid', () => {
   expect(parseGid(999)).toBe(999)
   expect(parseGid('999')).toBe(999)
   expect(parseGid(0)).toBe(0)
+  expect(parseGid(2 ** 32 - 2)).toBe(2 ** 32 - 2)
   for (const v of [undefined, null, '']) expect(parseGid(v)).toBeNull()
-  for (const v of ['abc', ' ', '1e3', '-1', -1, 1.5, false, true, [], {}]) expect(parseGid(v)).toBe('invalid')
+  for (const v of ['abc', ' ', '1e3', '-1', -1, 1.5, false, true, [], {}, 2 ** 32 - 1, '4294967295', '99999999999']) expect(parseGid(v)).toBe('invalid')
 })

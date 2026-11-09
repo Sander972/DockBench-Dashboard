@@ -30,6 +30,20 @@ describe('botRows', () => {
     expect(botRows(t({ now: '2026-10-14T10:05:00Z' }, { last_poll_at: '2026-10-14T10:04:50Z' }), NOW - 5 * 60_000)[0].ok).toBe(true)
     expect(botRows(t({ now: '2026-10-14T10:05:00Z' }), NOW)[0].ok).toBe(false)
   })
+  it('ages the last poll by the time since the answer arrived, and says status unavailable once no answer came for 90 s', () => {
+    const late = botRows(t(), NOW + 85_000, '', NOW)[0]
+    expect(late.ok).toBe(false)
+    expect(late.text).toContain('Not reaching Telegram')
+    const hung = botRows(t(), NOW + 91_000, '', NOW)[0]
+    expect(hung.bad).toBe(false)
+    expect(hung.text).toBe('Status unavailable: no answer for over 90 seconds')
+  })
+  it('lights red for a stopped container or a silent /status, yellow while starting', () => {
+    const bad = (x: TelegramStatus) => botRows(x, NOW)[0].bad
+    expect(bad(t({ state: 'exited', status: null }))).toBe(true)
+    expect(bad(t({ status: null, statusError: 'dead' }))).toBe(true)
+    expect(bad(t({ status: null, statusError: 'starting' }))).toBe(false)
+  })
   it('says why when the container is not running or /status is silent', () => {
     expect(botRows(t({ state: 'exited', status: null }), NOW)[0].text).toBe('The container is exited.')
     expect(botRows(t({ status: null, statusError: 'starting' }), NOW)[0].text).toBe('Starting, waiting for /status.')

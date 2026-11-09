@@ -22,7 +22,7 @@ export function parseCookie(secret: string, cookie: string | undefined | null): 
 
 // only this process writes the file, so it is read once per data dir and kept in memory; flushed with temp file plus rename through one queue
 type Cache = { list: SessionRecord[]; flushedAt: number }
-// the load promise, not its result, so two first calls on a cold cache share one read and one list
+// the load promise, not its result, so two first calls on a cold cache share one read and one list; a failed read is dropped, so the next call reads again
 const caches = new Map<string, Promise<Cache>>()
 let queue: Promise<unknown> = Promise.resolve()
 
@@ -34,8 +34,10 @@ const isRecord = (v: unknown): v is SessionRecord => {
 function load(dataDir: string): Promise<Cache> {
   let c = caches.get(dataDir)
   if (!c) {
-    c = read(dataDir)
-    caches.set(dataDir, c)
+    const p = read(dataDir)
+    caches.set(dataDir, p)
+    p.catch(() => { if (caches.get(dataDir) === p) caches.delete(dataDir) })
+    c = p
   }
   return c
 }

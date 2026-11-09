@@ -37,13 +37,14 @@ test('session limits default to 5 devices and 2 idle days, clamp out-of-range va
   expect(await readSettings(d)).toMatchObject({ maxDevices: 5, idleDays: 2 })
 })
 
-test('the activity log rotates past maxBytes into one .1 file and readEvents reads only the newest', async () => {
+test('the activity log rotates past maxBytes into one .1 file and readEvents tops the newest up from it', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dockbench-activity-'))
   const ev = (target: string) => ({ at: 't', actor: 'octocat', what: 'Deployed', target, ok: true, calls: [] })
   const size = JSON.stringify(ev('p1')).length + 1
   for (let i = 1; i <= 5; i++) await appendEvent(dir, ev(`p${i}`), size * 2)
   // p1 p2 rotate when p3 would pass the cap, p3 p4 when p5 would: .1 holds p3 p4, the old .1 is dropped
-  expect((await readEvents(dir)).map((e) => e.target)).toEqual(['p5'])
+  expect((await readEvents(dir)).map((e) => e.target)).toEqual(['p5', 'p4', 'p3'])
+  expect((await readEvents(dir, 2)).map((e) => e.target)).toEqual(['p5', 'p4'])
   expect((await Bun.file(join(dir, 'activity.jsonl.1')).text()).split('\n').filter(Boolean).map((l) => (JSON.parse(l) as { target: string }).target)).toEqual(['p3', 'p4'])
 })
 

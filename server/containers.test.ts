@@ -152,3 +152,12 @@ test('after a dashboard restart, a long-running container whose status server fa
   // a restart under the same id is young again
   expect((await view('a', 'x', young, true)).statusError).toBe('starting')
 })
+
+test('a container first seen young whose status server never answers turns dead once it is past the grace', async () => {
+  const view = statusTracker(() => Promise.reject(new Error('refused')), 20, 0, 50)
+  const started = new Date().toISOString()
+  expect((await view('a', 'x', started, true)).statusError).toBe('starting')
+  expect((await view('a', 'x', started, true)).statusError).toBe('starting')
+  await Bun.sleep(80)
+  expect((await view('a', 'x', started, true)).statusError).toBe('dead')
+})
