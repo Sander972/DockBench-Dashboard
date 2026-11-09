@@ -319,7 +319,8 @@ async function containersView() {
     // the log is read only while it says something /status cannot: a device code before the first answer or while the tunnel waits for approval, the fatal line of a restart loop
     const needLog = r.state === 'restarting' || (running && (sv.statusError === 'starting' || sv.status?.tunnel === 'waiting_for_login'))
     const log = needLog ? await containerLogs(env.dockerHost, r.id, 100).catch(() => []) : []
-    const check = images.peek(x.image)
+    // a stopped container triggers no image pull; it is checked again once started
+    const check = r.state === 'exited' ? null : images.peek(x.image)
     return {
       id: r.id, name: r.name, repo: x.repoUrl, state: r.state,
       startedAt: x.startedAt, finishedAt: x.finishedAt, exitCode: x.exitCode, restartCount: x.restartCount,

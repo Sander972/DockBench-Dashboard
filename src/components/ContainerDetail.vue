@@ -52,6 +52,7 @@ const imageNote = computed(() => {
   if (k.imageUpdate) return 'A newer image was pulled. Updating recreates the container from it; /home/dev and the workspace stay.'
   if (k.imageUpdate === false) return `Newest image, checked ${ago(k.imageCheckedAt!, now.value)}.`
   if (k.image.includes('@')) return 'Pinned by digest, so there is nothing to update to.'
+  if (k.state === 'exited') return 'Not checked while the container is stopped.'
   return k.imageCheckedAt ? 'The image pull failed. Try Check for update again.' : 'Not checked yet.'
 })
 // work that goes with the home volume on Remove, as /status last saw it; without a /status since the server started (stopped), it cannot be ruled out

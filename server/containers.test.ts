@@ -113,14 +113,18 @@ test('inspect is reused while the state holds and the answer is young, asked aga
   c.forget('a')
   expect(await c.get('a', 'exited')).toBe('a#3')
   await Bun.sleep(40)
-  expect(await c.get('a', 'exited')).toBe('a#4')
+  // a stopped container is not asked again past the ttl, only once the list shows another state
+  expect(await c.get('a', 'exited')).toBe('a#3')
+  expect(await c.get('a', 'running')).toBe('a#4')
+  await Bun.sleep(40)
+  expect(await c.get('a', 'running')).toBe('a#5')
   fail = true
   c.forget('a')
   await expect(c.get('a', 'exited')).rejects.toThrow('down')
   fail = false
-  expect(await c.get('a', 'exited')).toBe('a#6')
-  c.keep(['b'])
   expect(await c.get('a', 'exited')).toBe('a#7')
+  c.keep(['b'])
+  expect(await c.get('a', 'exited')).toBe('a#8')
 })
 
 test('ttlCache shares one answer for the ttl and keeps no failure', async () => {

@@ -96,13 +96,13 @@ export function shared<T>(ttlMs: number, load: () => Promise<T>, initial: T): ()
   }
 }
 
-// Inspect answers per container id for the live tick, reused while the container list shows the same state and the answer is younger than ttlMs: inspect changes only when a container starts, stops or restarts (a recreate brings a new id). A state change refetches at once, the ttl bounds a restart the list only ever showed as running, and forget() drops one after the dashboard's own action. A failed inspect is not kept.
+// Inspect answers per container id for the live tick, reused while the container list shows the same state and the answer is younger than ttlMs: inspect changes only when a container starts, stops or restarts (a recreate brings a new id). A state change refetches at once, the ttl bounds a restart the list only ever showed as running (a stopped container has none, so it is not asked again until it starts), and forget() drops one after the dashboard's own action. A failed inspect is not kept.
 export function inspectCache<T>(inspect: (id: string) => Promise<T>, ttlMs = 10_000) {
   const known = new Map<string, { state: string; at: number; p: Promise<T> }>()
   return {
     get(id: string, state: string): Promise<T> {
       const k = known.get(id)
-      if (k && k.state === state && performance.now() - k.at < ttlMs) return k.p
+      if (k && k.state === state && (state === 'exited' || performance.now() - k.at < ttlMs)) return k.p
       const p = inspect(id)
       known.set(id, { state, at: performance.now(), p })
       p.catch(() => { if (known.get(id)?.p === p) known.delete(id) })

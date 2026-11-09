@@ -23,7 +23,7 @@ const ci = computed(() => store.ci[props.c.name])
 </script>
 
 <template>
-  <li class="row" :class="{ sel, stale: store.dockerDown }">
+  <li class="row" :class="{ sel, stale: store.dockerDown, off: c.state === 'exited' }">
     <button type="button" class="hit" :data-id="c.id" :aria-current="sel ? 'true' : undefined" @click="$emit('select')">
       <Led :sev="v.sev" :blink="v.blink" />
       <span class="rh"><span class="name" :title="c.name">{{ rest }}</span><span class="state" :class="'s-' + v.sev">{{ v.word }}</span><span v-if="c.imageUpdate" class="state s-warn">· update</span><span v-if="ci && ci.state !== 'success' && ci.state !== 'none'" class="state" :class="ci.state === 'running' ? 's-warn' : 's-bad'">· CI {{ ci.state === 'running' ? 'running' : 'failing' }}</span></span>
