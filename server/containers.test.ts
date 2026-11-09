@@ -138,4 +138,6 @@ test('ttlCache shares one answer for the ttl and keeps no failure', async () => 
   await expect(get()).rejects.toThrow('down')
   fail = false
   expect(await get()).toBe(3)
+  get.reset()
+  expect(await get()).toBe(4)
 })

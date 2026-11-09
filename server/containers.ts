@@ -114,10 +114,10 @@ export function inspectCache<T>(inspect: (id: string) => Promise<T>, ttlMs = 10_
   }
 }
 
-// One answer shared for ttlMs from when it arrived, for facts that do not change between ticks (Docker's /info). A failure is not kept, so the next call asks again.
-export function ttlCache<T>(ttlMs: number, load: () => Promise<T>): () => Promise<T> {
+// One answer shared for ttlMs from when it arrived, for facts that do not change between ticks (Docker's /info). A failure is not kept, so the next call asks again. reset drops the answer (tests).
+export function ttlCache<T>(ttlMs: number, load: () => Promise<T>): (() => Promise<T>) & { reset: () => void } {
   let cached: { at: number; p: Promise<T> } | null = null
-  return () => {
+  const get = () => {
     if (!cached || performance.now() - cached.at >= ttlMs) {
       const p = load()
       const entry = { at: Number.POSITIVE_INFINITY, p }
@@ -126,6 +126,7 @@ export function ttlCache<T>(ttlMs: number, load: () => Promise<T>): () => Promis
     }
     return cached.p
   }
+  return Object.assign(get, { reset: () => { cached = null } })
 }
 
 export interface ImageCheck {

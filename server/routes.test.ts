@@ -14,6 +14,13 @@ const docker = Bun.serve({ port: 0, fetch: async (req) => (dockerFake ? dockerFa
 // Portainer that fails everything unless a test swaps in its own fake
 let portainerFake: ((req: Request) => Response | Promise<Response>) | null = null
 const portainer = Bun.serve({ port: 0, fetch: (req) => (portainerFake ? portainerFake(req) : new Response('down', { status: 500 })) })
+// api.github.com and api.telegram.org are hardcoded, so a test that needs them sets externalFake, which answers for those two hosts only; every other fetch goes out unchanged
+let externalFake: ((req: Request) => Response | Promise<Response>) | null = null
+const realFetch = globalThis.fetch
+globalThis.fetch = Object.assign((input: string | URL | Request, init?: BunFetchRequestInit) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  return externalFake && /^https:\/\/api\.(github\.com|telegram\.org)\//.test(url) ? Promise.resolve(externalFake(input instanceof Request ? input : new Request(url, init))) : realFetch(input, init)
+}, realFetch)
 // collector that has no sample yet (503) unless a test swaps in its own fake
 let collectorFake: ((req: Request) => Response | Promise<Response>) | null = null
 const collectorServer = Bun.serve({ port: 0, fetch: (req) => (collectorFake ? collectorFake(req) : new Response('no sample yet', { status: 503 })) })
@@ -33,7 +40,7 @@ Object.assign(process.env, {
   COLLECTOR_URL: `http://localhost:${collectorServer.port}`,
 })
 
-const { routes } = await import('./routes')
+const { routes, testHooks } = await import('./routes')
 const { onError } = await import('./http')
 const { createSession } = await import('./session')
 const { createSessionRecord, DEFAULT_LIMITS, signCookie } = await import('./sessions')
@@ -652,6 +659,7 @@ test('dashboard update pulls the collector image too and redeploys the stack whe
 })
 
 test('config re-PUT adds CPUSET from the host core count, so an older stack gets the reserve without an option change; a matching CPUSET with nothing else changed, or an unknown core count, still answers 409', async () => {
+  testHooks.resetInfo()
   await Bun.write(join(dir, 'github.json'), JSON.stringify({ login: 'octocat', id: 1, name: null, avatar_url: '', token: 'gho_x' }))
   const image = 'ghcr.io/x/dockbench:latest'
   const older = [{ name: 'PROJECT', value: 'shop' }, { name: 'DOCKBENCH_IMAGE', value: image }, { name: 'SSH_KEY', value: 'k' }, { name: 'INSTALL_CLAUDE', value: '1' }, { name: 'CLAUDE_CONFIG_REPO', value: '' }, { name: 'CLAUDE_CONFIG_KEY', value: '' }, { name: 'VSCODE_CONFIG', value: '1' }, { name: 'VSCODE_SETTINGS', value: '' }]
@@ -699,6 +707,113 @@ test('config re-PUT adds CPUSET from the host core count, so an older stack gets
   } finally {
     dockerFake = null
     portainerFake = null
+  }
+})
+
+test('a dev container deploy and a Telegram deploy pass CPUSET from the host core count to the new stack', async () => {
+  await Bun.write(join(dir, 'github.json'), JSON.stringify({ login: 'octocat', id: 1, name: null, avatar_url: '', token: 'gho_x' }))
+  testHooks.resetInfo()
+  const created: Record<string, { name: string; value: string }[]> = {}
+  dockerFake = (req) => {
+    const u = new URL(req.url)
+    if (u.pathname === '/info') return Response.json({ Name: 'vps', NCPU: 4, MemTotal: 8e9, ServerVersion: '29' })
+    // the Telegram deploy asks by name for its own container, which never exists here
+    if (u.pathname === '/containers/json') return Response.json(created['dockbench-cpu'] && !u.searchParams.get('filters')?.includes('telegram') ? [{ Id: 'n1', Names: ['/dockbench-cpu'], State: 'running', Image: 'x' }] : [])
+    return new Response('down', { status: 500 })
+  }
+  portainerFake = async (req) => {
+    const u = new URL(req.url)
+    if (u.pathname === '/api/stacks') return Response.json([])
+    if (u.pathname === '/api/registries') return Response.json([])
+    if (u.pathname === '/api/endpoints/1/docker/images/create') return new Response('{"status":"done"}\n')
+    if (u.pathname === '/api/stacks/create/standalone/string') {
+      const b = (await req.json()) as { name: string; env: { name: string; value: string }[] }
+      created[b.name] = b.env
+      return Response.json({ Id: 9 })
+    }
+    return new Response('down', { status: 500 })
+  }
+  externalFake = (req) => (new URL(req.url).pathname.endsWith('/getMe') ? Response.json({ ok: true, result: { username: 'mybot' } }) : new Response('unexpected', { status: 500 }))
+  const post = (path: string, body: unknown) => fetch(base + path, { method: 'POST', headers: { cookie: session, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: JSON.stringify(body) })
+  try {
+    const dev = await post('/api/deploy', { repo: 'a/b', project: 'cpu', gitUserName: 'A', gitUserEmail: 'a@b.c', ghLogin: true })
+    expect(dev.status).toBe(201)
+    expect(created['dockbench-cpu']).toContainEqual({ name: 'CPUSET', value: '1-3' })
+    const tg = await post('/api/telegram/deploy', { token: '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw', dockerGid: '999' })
+    expect(tg.status).toBe(201)
+    expect(created['dockbench-telegram']).toContainEqual({ name: 'CPUSET', value: '1-3' })
+    expect(created['dockbench-telegram']).toContainEqual({ name: 'DOCKER_GID', value: '999' })
+  } finally {
+    dockerFake = null
+    portainerFake = null
+    externalFake = null
+  }
+})
+
+test('config end to end: dropping the Claude config removes every duplicate key, the VS Code env is patched only on a flip, the same env answers 409', async () => {
+  await Bun.write(join(dir, 'github.json'), JSON.stringify({ login: 'octocat', id: 1, name: null, avatar_url: '', token: 'gho_x' }))
+  await Bun.write(join(dir, 'settings.json'), JSON.stringify({ maxDevices: 20, claudeConfigRepo: 'octocat/cfg', vscodeSettings: '{"a":1}' }))
+  testHooks.resetInfo()
+  const image = 'ghcr.io/x/dockbench:latest'
+  const base0 = [{ name: 'PROJECT', value: 'cfg' }, { name: 'DOCKBENCH_IMAGE', value: image }, { name: 'SSH_KEY', value: 'k' }, { name: 'INSTALL_CLAUDE', value: '1' }, { name: 'CLAUDE_CONFIG_REPO', value: 'git@github.com:octocat/cfg.git' }, { name: 'CLAUDE_CONFIG_KEY', value: 'ck' }, { name: 'VSCODE_CONFIG', value: '1' }, { name: 'VSCODE_SETTINGS', value: 'old' }, { name: 'CPUSET', value: '1-3' }]
+  let stackEnv = base0
+  let put: { env: { name: string; value: string }[] } | null = null
+  let containerId = 'k1'
+  const github: string[] = []
+  dockerFake = (req) => {
+    const u = new URL(req.url)
+    if (u.pathname === '/info') return Response.json({ Name: 'vps', NCPU: 4, MemTotal: 8e9, ServerVersion: '29' })
+    if (u.pathname === '/containers/json') return Response.json([{ Id: containerId, Names: ['/dockbench-cfg'], State: 'running', Image: image }])
+    if (u.pathname === `/containers/${containerId}/json`) return Response.json({ Image: 'sha256:a', State: { Status: 'running', StartedAt: '2026-11-09T10:00:00Z', FinishedAt: '0001-01-01T00:00:00Z', ExitCode: 0 }, RestartCount: 0, HostConfig: { Memory: 0 }, Config: { Env: [], Image: image, Labels: { 'com.docker.compose.project': 'dockbench-cfg' } }, Mounts: [] })
+    if (u.pathname === `/images/${image}/json`) return Response.json({ Id: 'sha256:a', RepoDigests: [] })
+    return new Response('down', { status: 500 })
+  }
+  portainerFake = async (req) => {
+    const u = new URL(req.url)
+    if (u.pathname === '/api/stacks') return Response.json([{ Id: 6, Name: 'dockbench-cfg', EndpointId: 1 }])
+    if (u.pathname === '/api/stacks/6/file') return Response.json({ StackFileContent: '' })
+    if (u.pathname === '/api/stacks/6' && req.method === 'GET') return Response.json({ Env: stackEnv })
+    if (u.pathname === '/api/stacks/6' && req.method === 'PUT') {
+      put = (await req.json()) as typeof put
+      stackEnv = put!.env
+      containerId = containerId === 'k1' ? 'k2' : 'k1' // recreated under a new id, so the route does not wait for the replacement
+      return Response.json({})
+    }
+    return new Response('down', { status: 500 })
+  }
+  externalFake = (req) => {
+    const u = new URL(req.url)
+    github.push(`${req.method} ${u.pathname}`)
+    if (req.method === 'GET' && u.pathname === '/repos/octocat/cfg/keys') return Response.json([{ id: 1, title: 'dockbench-cfg', read_only: true }, { id: 2, title: 'dockbench-cfg', read_only: true }, { id: 3, title: 'dockbench-cfg', read_only: false }, { id: 4, title: 'dockbench-other', read_only: true }])
+    if (req.method === 'DELETE') return new Response(null, { status: 204 })
+    return new Response('unexpected', { status: 500 })
+  }
+  const post = (b: { installClaude: boolean; injectClaudeConfig: boolean; vscodeConfig: boolean }) => fetch(`${base}/api/containers/${containerId}/config`, { method: 'POST', headers: { cookie: session, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' }, body: JSON.stringify(b) })
+  const val = (k: string) => put!.env.find((e) => e.name === k)?.value
+  try {
+    // config off, VS Code unchanged: the stack drops the config repo and key, keeps the VS Code settings it has, and both read-only keys with the container's title go
+    const off = await post({ installClaude: true, injectClaudeConfig: false, vscodeConfig: true })
+    expect(off.status).toBe(200)
+    expect([val('CLAUDE_CONFIG_REPO'), val('CLAUDE_CONFIG_KEY'), val('VSCODE_SETTINGS')]).toEqual(['', '', 'old'])
+    expect(github).toEqual(['GET /repos/octocat/cfg/keys', 'DELETE /repos/octocat/cfg/keys/1', 'DELETE /repos/octocat/cfg/keys/2'])
+
+    // VS Code flipped off: its env is patched, nothing on GitHub is touched
+    github.length = 0
+    put = null
+    expect((await post({ installClaude: true, injectClaudeConfig: false, vscodeConfig: false })).status).toBe(200)
+    expect(val('VSCODE_CONFIG')).toBe('0')
+    expect(github).toEqual([])
+
+    // the same options again: same env on the same image, nothing to recreate
+    put = null
+    const same = await post({ installClaude: true, injectClaudeConfig: false, vscodeConfig: false })
+    expect(same.status).toBe(409)
+    expect(put).toBeNull()
+  } finally {
+    dockerFake = null
+    portainerFake = null
+    externalFake = null
+    await Bun.write(join(dir, 'settings.json'), JSON.stringify({ maxDevices: 20 }))
   }
 })
 

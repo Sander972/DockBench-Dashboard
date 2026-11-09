@@ -140,6 +140,8 @@ const diskSizes = shared(15 * 60_000, () => systemDf(env.dockerHost), { rw: new 
 // the live tick's inspect per container, and Docker's /info (name, cores, RAM, version), reused between ticks instead of asked every 2 s
 const inspects = inspectCache((id) => inspectContainer(env.dockerHost, id))
 const info = ttlCache(5 * 60_000, () => dockerInfo(env.dockerHost))
+// for routes.test.ts only: the module-level /info cache would otherwise carry one test's answer into the next for 5 minutes
+export const testHooks = { resetInfo: () => info.reset() }
 // host, container and process usage from the collector container; one /metrics answer per live interval serves both views of a tick
 const collector = createCollector(env.collectorUrl, 2000)
 const statusView = statusTracker((name) => fetchStatus(`http://${name}:8080/status`))
