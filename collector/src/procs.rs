@@ -14,6 +14,8 @@ pub struct ProcRaw {
     pub jiffies: u64,
     pub rss: u64,
     pub container: Option<String>,
+    /// start time in jiffies since boot (stat field 22)
+    pub start: u64,
 }
 
 /// Same-named processes of one container summed over one interval.
@@ -114,7 +116,7 @@ impl Walker {
                 },
             };
             seen.insert(pid, (st.start, container.clone()));
-            out.push(ProcRaw { pid, comm: st.comm, jiffies: st.jiffies, rss: st.rss_pages * page, container });
+            out.push(ProcRaw { pid, comm: st.comm, jiffies: st.jiffies, rss: st.rss_pages * page, container, start: st.start });
         }
         self.containers = seen;
         out
@@ -126,16 +128,18 @@ pub fn walk(proc_root: &Path) -> Vec<ProcRaw> {
     Walker::default().walk(proc_root)
 }
 
-/// Sums `cur` per `(container, comm)`; CPU is the jiffies delta against `prev` as a share of the host's delta (0-100). A pid absent from `prev` was born since that walk, so all its jiffies count; one reused under another name or container, or whose counter went back, contributes 0. Keeps entries with CPU above 0 or more than 1 MiB resident.
+/// Sums `cur` per `(container, comm)`; CPU is the jiffies delta against `prev` as a share of the host's delta (0-100). A pid absent from `prev` that started after every process `prev` saw was born since that walk, so all its jiffies count; one that started earlier (the walk skipped it, or `prev` is empty because the walk failed) would count its whole lifetime, so it contributes 0, as does a pid reused under another name or container, or whose counter went back. Keeps entries with CPU above 0 or more than 1 MiB resident.
 pub fn aggregate(prev: &[ProcRaw], cur: &[ProcRaw], host_delta_jiffies: u64) -> Vec<ProcAgg> {
     let before: HashMap<u32, &ProcRaw> = prev.iter().map(|p| (p.pid, p)).collect();
+    let newest = prev.iter().map(|p| p.start).max();
     let mut groups: HashMap<(Option<&str>, &str), (Vec<u32>, u64, u64)> = HashMap::new();
     for p in cur {
         let d = match before.get(&p.pid) {
             Some(b) if b.comm == p.comm && b.container == p.container => p.jiffies.saturating_sub(b.jiffies),
             Some(_) => 0,
             // known limit: a process born and gone between two walks is never seen, and a process's CPU between its last walk and its exit is lost (both still count in the container's cgroup total)
-            None => p.jiffies,
+            None if newest.is_some_and(|n| p.start > n) => p.jiffies,
+            None => 0,
         };
         let g = groups.entry((p.container.as_deref(), p.comm.as_str())).or_default();
         g.0.push(p.pid);
@@ -234,8 +238,8 @@ mod tests {
     #[test]
     fn aggregate_sums_same_name_per_container_and_drops_idle_small() {
         let c = Some("b".repeat(64));
-        let prev = vec![ProcRaw { pid: 1, comm: "node".into(), jiffies: 100, rss: 0, container: c.clone() }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 100, rss: 0, container: c.clone() }];
-        let cur = vec![ProcRaw { pid: 1, comm: "node".into(), jiffies: 150, rss: 4 << 20, container: c.clone() }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 150, rss: 4 << 20, container: c.clone() }, ProcRaw { pid: 3, comm: "sleep".into(), jiffies: 0, rss: 100, container: None }];
+        let prev = vec![ProcRaw { pid: 1, comm: "node".into(), jiffies: 100, rss: 0, container: c.clone(), start: 0 }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 100, rss: 0, container: c.clone(), start: 0 }];
+        let cur = vec![ProcRaw { pid: 1, comm: "node".into(), jiffies: 150, rss: 4 << 20, container: c.clone(), start: 0 }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 150, rss: 4 << 20, container: c.clone(), start: 0 }, ProcRaw { pid: 3, comm: "sleep".into(), jiffies: 0, rss: 100, container: None, start: 0 }];
         let a = aggregate(&prev, &cur, 400);
         assert_eq!(a.len(), 1);
         assert_eq!((a[0].comm.as_str(), a[0].pids.clone(), a[0].cpu_pct, a[0].rss), ("node", vec![1, 2], 25.0, 8 << 20));
@@ -243,15 +247,25 @@ mod tests {
 
     #[test]
     fn aggregate_ignores_a_reused_pid_and_a_counter_going_back() {
-        let prev = vec![ProcRaw { pid: 1, comm: "git".into(), jiffies: 100, rss: 0, container: None }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 900, rss: 0, container: None }];
-        let cur = vec![ProcRaw { pid: 1, comm: "claude".into(), jiffies: 300, rss: 0, container: None }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 10, rss: 0, container: None }];
+        let prev = vec![ProcRaw { pid: 1, comm: "git".into(), jiffies: 100, rss: 0, container: None, start: 0 }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 900, rss: 0, container: None, start: 0 }];
+        let cur = vec![ProcRaw { pid: 1, comm: "claude".into(), jiffies: 300, rss: 0, container: None, start: 0 }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 10, rss: 0, container: None, start: 0 }];
         assert!(aggregate(&prev, &cur, 400).is_empty());
     }
 
     #[test]
     fn aggregate_counts_a_process_born_since_the_last_walk_whole() {
-        let cur = vec![ProcRaw { pid: 9, comm: "git".into(), jiffies: 40, rss: 0, container: None }];
-        let a = aggregate(&[], &cur, 400);
-        assert_eq!((a.len(), a[0].cpu_pct), (1, 10.0), "all its CPU time fell in this interval");
+        let prev = vec![ProcRaw { pid: 1, comm: "bash".into(), jiffies: 5, rss: 0, container: None, start: 100 }];
+        let cur = vec![ProcRaw { pid: 1, comm: "bash".into(), jiffies: 5, rss: 0, container: None, start: 100 }, ProcRaw { pid: 9, comm: "git".into(), jiffies: 40, rss: 0, container: None, start: 200 }];
+        let a = aggregate(&prev, &cur, 400);
+        assert_eq!((a.len(), a[0].comm.as_str(), a[0].cpu_pct), (1, "git", 10.0), "all its CPU time fell in this interval");
+    }
+
+    #[test]
+    fn aggregate_never_counts_the_lifetime_of_a_process_the_last_walk_missed() {
+        // the previous walk failed (empty) or skipped a pid that started before the newest process it saw: its jiffies are a lifetime, not this interval
+        let old = ProcRaw { pid: 8, comm: "node".into(), jiffies: 90_000, rss: 0, container: None, start: 50 };
+        assert!(aggregate(&[], std::slice::from_ref(&old), 400).is_empty());
+        let prev = vec![ProcRaw { pid: 1, comm: "bash".into(), jiffies: 5, rss: 0, container: None, start: 100 }];
+        assert!(aggregate(&prev, &[old], 400).is_empty());
     }
 }
