@@ -816,7 +816,7 @@ async function runDeploy() {
     const r = await api.deploy({ repo: d.repo!.fullName, project: d.project, gitUserName: d.gitName, gitUserEmail: d.gitEmail, auth: d.auth, token: d.auth === 'token' ? d.token : undefined, image: d.image, installClaude: d.installClaude, injectClaudeConfig: d.injectClaudeConfig && !!store.session?.claudeConfigRepo, setupRerun: d.setupRerun, vscodeConfig: d.vscodeConfig, ghLogin: d.ghLogin })
     d.token = ''
     if (d.run) { d.run.calls = r.calls; d.run.id = r.id }
-    toast(`Deployed ${name}`)
+    toast(r.warning ? `Deployed ${name}, but: ${r.warning}` : `Deployed ${name}`, r.warning ? 15_000 : undefined)
     await poll({ force: true })
     loadActivity()
     loadRepos(true)
@@ -871,7 +871,7 @@ async function runTelegram(op: TgOp) {
       const r = await api.deployTelegram(g.token.trim(), gid)
       g.token = ''
       g.calls = r.calls
-      toast(`Deployed @${r.bot}. Waiting for /status`)
+      toast(r.warning ? `Deployed @${r.bot}, but: ${r.warning}` : `Deployed @${r.bot}. Waiting for /status`, r.warning ? 15_000 : undefined)
     } else if (op === 'claim') {
       g.claim = await api.claimTelegram()
     } else {

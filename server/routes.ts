@@ -12,7 +12,7 @@ import { containerByName, containerLogs, containerPost, dockerInfo, execRun, ima
 import { diskUsage } from './host'
 import { createCollector, history as collectorHistory, WINDOWS, type Window } from './collector'
 import { cpusetFor, createStack, deleteStack, findStack, fromStackFile, patchEnv, pullImage, putStack, readStack, redeployStack, STACK_FILE, stackEnv, TELEGRAM_STACK_FILE, vscodeEnv } from './portainer'
-import { deploy, DeployFailure, REPO_RE, validateDeploy } from './deploy'
+import { deploy, DeployFailure, lostCreate, REPO_RE, validateDeploy } from './deploy'
 import { deleteKeys, keyTitle, removeStack, stackKeys } from './remove'
 import { generateDeployKey } from './sshkey'
 import { deviceCode, fetchStatus, imageChecker, inspectCache, lastError, shared, statusTracker, ttlCache, updateAvailable } from './containers'
@@ -172,6 +172,8 @@ async function lastFetches(): Promise<Map<string, string>> {
 
 // action in progress per container id, so every tab sees "Stopping…" and a second action is refused
 const pending = new Map<string, 'start' | 'stop' | 'restart' | 'update' | 'config' | 'vscode' | 'claudeConfig' | 'remove'>()
+// container names with a deploy in flight (/api/deploy)
+const deploying = new Set<string>()
 
 // runs `run` while `pending` holds the container; no await between the check and the set, or two requests both pass
 async function withPending(id: string, name: string, kind: NonNullable<ReturnType<typeof pending.get>>, run: () => Promise<Response>): Promise<Response> {
@@ -991,6 +993,10 @@ export const routes = {
       const configRepo = injectClaudeConfig ? settings.claudeConfigRepo : ''
       if (injectClaudeConfig && !configRepo) return json({ error: 'Set the Claude config repo in Settings first' }, 400)
       const a = await requireAccount()
+      // two deploys of one project would both pass the 409 checks before either creates its stack; one server process, so a set is the lock
+      const name = `dockbench-${project}`
+      if (deploying.has(name)) return json({ error: `A deploy of ${name} is already running` }, 409)
+      deploying.add(name)
       const started = Date.now()
       try {
         const key = ghLogin ? null : generateDeployKey()
@@ -1008,12 +1014,14 @@ export const routes = {
           deleteConfigKey: (id) => deleteDeployKey(a.token, configRepo, id),
           createStack: (name) => createStack(portainer, name, stackEnv({ project, repo, image, sshKey: key?.privateKeyBase64 ?? '', gitUserName, gitUserEmail, installClaude, setupRerun, claudeConfigRepo: configRepo, claudeConfigKey: configKey?.privateKeyBase64 ?? '', vscodeConfig, vscodeSettings: settings.vscodeSettings, cpuset })),
         }, configRepo)
-        await log(req, server, 'Deployed', result.name, { calls: result.calls, ms: Date.now() - started })
+        await log(req, server, 'Deployed', result.name, { calls: result.calls, ms: Date.now() - started, ...(result.warning && { note: result.warning }) })
         return json(result, 201)
       } catch (e) {
         const f = e instanceof DeployFailure ? e : new DeployFailure(502, (e as Error).message, [])
-        await log(req, server, 'Deploy failed', `dockbench-${project}`, { ok: false, note: f.message, calls: f.calls, ms: Date.now() - started })
+        await log(req, server, 'Deploy failed', name, { ok: false, note: f.message, calls: f.calls, ms: Date.now() - started })
         return json({ error: f.message, calls: f.calls }, f.status)
+      } finally {
+        deploying.delete(name)
       }
     }),
   },
@@ -1055,9 +1063,16 @@ export const routes = {
         if (await step('GET', '/api/stacks', 200, () => findStack(portainer, TELEGRAM_NAME))) throw new HttpError(409, `Stack ${TELEGRAM_NAME} already exists. Remove it in Portainer to deploy again.`)
         await step('POST', '/images/create', 200, () => pullImage(portainer, TELEGRAM_IMAGE))
         const cpuset = cpusetFor((await info().catch(() => null))?.ncpu ?? 0)
-        await step('POST', '/api/stacks/create/standalone/string', 200, () => createStack(portainer, TELEGRAM_NAME, telegramEnv(token, gid, cpuset), TELEGRAM_STACK_FILE))
-        await log(req, server, 'Deployed', TELEGRAM_NAME, { calls, ms: Date.now() - started })
-        return json({ bot, calls }, 201)
+        let warning: string | undefined
+        try {
+          await step('POST', '/api/stacks/create/standalone/string', 200, () => createStack(portainer, TELEGRAM_NAME, telegramEnv(token, gid, cpuset), TELEGRAM_STACK_FILE))
+        } catch (e) {
+          // a lost answer can still mean a created stack: then the deploy is done, and calling it failed would only make the next try a 409
+          if (!(await step('GET', '/api/stacks', 200, () => findStack(portainer, TELEGRAM_NAME)).catch(() => null))) throw e
+          warning = lostCreate(e)
+        }
+        await log(req, server, 'Deployed', TELEGRAM_NAME, { calls, ms: Date.now() - started, ...(warning && { note: warning }) })
+        return json({ bot, calls, ...(warning && { warning }) }, 201)
       } catch (e) {
         await log(req, server, 'Deploy failed', TELEGRAM_NAME, { ok: false, note: errMsg(e), calls, ms: Date.now() - started })
         return json({ error: errMsg(e), calls }, e instanceof HttpError ? e.status : 502)

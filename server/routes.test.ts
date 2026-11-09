@@ -817,6 +817,47 @@ test('config end to end: dropping the Claude config removes every duplicate key,
   }
 })
 
+test('a second deploy of the same project while the first runs answers 409 at once', async () => {
+  await Bun.write(join(dir, 'github.json'), JSON.stringify({ login: 'octocat', id: 1, name: null, avatar_url: '', token: 'gho_x' }))
+  dockerFake = async (req) => (new URL(req.url).pathname === '/containers/json' ? (await Bun.sleep(300), Response.json([])) : new Response('down', { status: 500 }))
+  const post = () => fetch(`${base}/api/deploy`, { method: 'POST', headers: { cookie: session, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: JSON.stringify({ repo: 'a/b', project: 'twice', gitUserName: 'A', gitUserEmail: 'a@b.c', ghLogin: true }) })
+  try {
+    const first = post()
+    await Bun.sleep(50)
+    const second = await post()
+    expect(second.status).toBe(409)
+    expect(((await second.json()) as { error: string }).error).toBe('A deploy of dockbench-twice is already running')
+    expect((await first).status).toBe(502) // Portainer is down in this test, so the first one fails after its list
+    // the lock is released when the first one ends
+    expect((await post()).status).toBe(502)
+  } finally {
+    dockerFake = null
+  }
+})
+
+test('a Telegram stack create whose answer was lost but that Portainer created answers 201 with a warning', async () => {
+  let created = false
+  dockerFake = (req) => (new URL(req.url).pathname === '/containers/json' ? Response.json([]) : new Response('down', { status: 500 }))
+  portainerFake = (req) => {
+    const u = new URL(req.url)
+    if (u.pathname === '/api/stacks') return Response.json(created ? [{ Id: 8, Name: 'dockbench-telegram', EndpointId: 1 }] : [])
+    if (u.pathname === '/api/registries') return Response.json([])
+    if (u.pathname === '/api/endpoints/1/docker/images/create') return new Response('{"status":"done"}\n')
+    if (u.pathname === '/api/stacks/create/standalone/string') return (created = true, new Response('gateway timeout', { status: 504 }))
+    return new Response('down', { status: 500 })
+  }
+  externalFake = () => Response.json({ ok: true, result: { username: 'mybot' } })
+  try {
+    const res = await fetch(`${base}/api/telegram/deploy`, { method: 'POST', headers: { cookie: session, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: JSON.stringify({ token: '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw', dockerGid: '999' }) })
+    expect(res.status).toBe(201)
+    expect(((await res.json()) as { warning?: string }).warning).toContain("Portainer created the stack, but its answer was lost")
+  } finally {
+    dockerFake = null
+    portainerFake = null
+    externalFake = null
+  }
+})
+
 // last in the file: passkeys.json turns on step-up, undone at the end
 test('passkey sign-in mints a session and a step-up window; guarded actions and passkey changes need that window', async () => {
   const { softKey } = await import('./softkey')

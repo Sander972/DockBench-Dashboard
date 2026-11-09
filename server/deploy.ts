@@ -55,7 +55,11 @@ export interface DeployResult {
   id: string
   name: string
   calls: ApiCall[]
+  // set when Portainer created the stack but its answer to the create was lost
+  warning?: string
 }
+
+export const lostCreate = (e: unknown) => `Portainer created the stack, but its answer was lost: ${(e as Error).message}`
 
 export class DeployFailure extends Error {
   status: number
@@ -102,6 +106,7 @@ export async function deploy(project: string, repo: string, deps: DeployDeps, co
       throw e
     }
   }
+  let warning: string | undefined
   try {
     await step('POST', '/api/stacks/create/standalone/string', 200, () => deps.createStack(name))
   } catch (e) {
@@ -113,7 +118,9 @@ export async function deploy(project: string, repo: string, deps: DeployDeps, co
       if (key) await unkey(repo, key.id, deps.deleteDeployKey!)
       if (configKey) await unkey(configRepo, configKey.id, deps.deleteConfigKey!)
     }
-    throw e
+    // the stack exists: report the deploy as done, so the container is kept and found below instead of a failure followed by a 409 on the next try
+    if (!stack) throw e
+    warning = lostCreate(e)
   }
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   let id = ''
@@ -121,5 +128,5 @@ export async function deploy(project: string, repo: string, deps: DeployDeps, co
     id = (await step('GET', '/containers/json', 200, deps.listContainers)).find((c) => c.name === name)?.id ?? ''
     if (!id) await sleep(1000)
   }
-  return { id, name, calls }
+  return { id, name, calls, ...(warning && { warning }) }
 }

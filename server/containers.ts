@@ -43,6 +43,8 @@ export interface StatusView {
 
 interface Track {
   startedAt: string | null
+  // up longer than the start grace when first seen (the dashboard restarted under it): a first failed request means dead, not starting
+  old: boolean
   status: DevContainerStatus | null
   fetchedAt: string | null
   answered: boolean
@@ -52,13 +54,16 @@ interface Track {
   settled: number
 }
 
-// One /status request per container at a time, whatever the number of tabs polling, and none sooner than minMs after the last one settled: the 2 s live tick would otherwise ask every container on every tick for facts (branch, dirty count, tunnel) that change over seconds. A poll waits up to waitMs for the answer, otherwise it reports what is known and the request carries on for the next poll. "starting" until /status answers once since the container (re)started (a restart asks at once), "dead" when it answered before and fails now. ponytail: in memory, so after a dashboard restart a dead status server shows as starting.
-export function statusTracker(fetchStatus: (name: string) => Promise<DevContainerStatus>, waitMs = 2000, minMs = 5000) {
+// the status server starts after the Claude Code install or update, the clone and mise install, which take minutes on a first start
+const START_GRACE_MS = 15 * 60_000
+
+// One /status request per container at a time, whatever the number of tabs polling, and none sooner than minMs after the last one settled: the 2 s live tick would otherwise ask every container on every tick for facts (branch, dirty count, tunnel) that change over seconds. A poll waits up to waitMs for the answer, otherwise it reports what is known and the request carries on for the next poll. "starting" until /status answers once since the container (re)started (a restart asks at once), "dead" when it answered before and fails now, or when its first request fails on a container that was up longer than graceMs when first seen (the tracker is in memory, so after a dashboard restart a dead status server would otherwise show as starting).
+export function statusTracker(fetchStatus: (name: string) => Promise<DevContainerStatus>, waitMs = 2000, minMs = 5000, graceMs = START_GRACE_MS) {
   const tracks = new Map<string, Track>()
   return async function view(id: string, name: string, startedAt: string | null, running: boolean): Promise<StatusView> {
     let t = tracks.get(id)
-    if (t && running && t.startedAt !== startedAt) t = { ...t, startedAt, answered: false, failed: false, inflight: null, settled: 0 }
-    if (!t) t = { startedAt, status: null, fetchedAt: null, answered: false, failed: false, inflight: null, settled: 0 }
+    if (t && running && t.startedAt !== startedAt) t = { ...t, startedAt, old: false, answered: false, failed: false, inflight: null, settled: 0 }
+    if (!t) t = { startedAt, old: !!startedAt && Date.now() - Date.parse(startedAt) > graceMs, status: null, fetchedAt: null, answered: false, failed: false, inflight: null, settled: 0 }
     tracks.set(id, t)
     const track = t
     if (running) {
@@ -70,7 +75,7 @@ export function statusTracker(fetchStatus: (name: string) => Promise<DevContaine
       }
       if (track.inflight) await Promise.race([track.inflight, Bun.sleep(waitMs)])
     }
-    const statusError = !running ? null : !track.answered ? 'starting' : track.failed ? 'dead' : null
+    const statusError = !running ? null : track.failed && (track.answered || track.old) ? 'dead' : !track.answered ? 'starting' : null
     return { status: track.status, statusError, statusFetchedAt: track.fetchedAt }
   }
 }

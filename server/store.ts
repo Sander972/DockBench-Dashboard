@@ -1,4 +1,4 @@
-import { appendFile, mkdir, rename } from 'node:fs/promises'
+import { appendFile, mkdir, rename, stat } from 'node:fs/promises'
 
 export interface Account {
   login: string
@@ -38,12 +38,16 @@ export async function writeAccount(dataDir: string, account: Account): Promise<v
   await Bun.write(`${dataDir}/github.json`, JSON.stringify(account))
 }
 
-export async function appendEvent(dataDir: string, event: ActivityEvent): Promise<void> {
+// the unauthenticated OAuth callback writes events too, so the log is capped: past maxBytes it moves to activity.jsonl.1 (replacing the previous one) and starts again
+export async function appendEvent(dataDir: string, event: ActivityEvent, maxBytes = 5 * 1024 * 1024): Promise<void> {
   await mkdir(dataDir, { recursive: true })
-  await appendFile(`${dataDir}/activity.jsonl`, JSON.stringify(event) + '\n')
+  const path = `${dataDir}/activity.jsonl`
+  const line = JSON.stringify(event) + '\n'
+  if ((await stat(path).then((s) => s.size, () => 0)) + Buffer.byteLength(line) > maxBytes) await rename(path, `${path}.1`).catch(() => {})
+  await appendFile(path, line)
 }
 
-// ponytail: reads the whole file on every request, fine for a personal log; rotate or switch to SQLite if it grows past a few MB
+// reads only the newest file, so the feed is short right after a rotation; at most 5 MB per request
 export async function readEvents(dataDir: string, limit = 200): Promise<ActivityEvent[]> {
   const f = Bun.file(`${dataDir}/activity.jsonl`)
   if (!(await f.exists())) return []

@@ -21,14 +21,31 @@ export async function exchangeCode(clientId: string, clientSecret: string, code:
   return data.access_token
 }
 
-async function gh<T>(token: string, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
-  const res = await fetch(API + path, {
+async function ghFetch(token: string, url: string, init: { method?: string; body?: unknown } = {}): Promise<Response> {
+  const res = await fetch(url, {
     method: init.method ?? 'GET',
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'dockbench-dashboard', ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
     body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
   })
-  if (!res.ok) throw new Error(`GitHub ${path} returned ${res.status}: ${(await res.text()).slice(0, 300)}`)
+  if (!res.ok) throw new Error(`GitHub ${url.replace(API, '')} returned ${res.status}: ${(await res.text()).slice(0, 300)}`)
+  return res
+}
+
+async function gh<T>(token: string, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+  const res = await ghFetch(token, API + path, init)
   return res.status === 204 ? (undefined as T) : (res.json() as Promise<T>)
+}
+
+// every page of a list, following the Link header's rel="next"
+async function ghAll<T>(token: string, path: string): Promise<T[]> {
+  const out: T[] = []
+  let url: string | null = API + path
+  while (url) {
+    const res = await ghFetch(token, url)
+    out.push(...((await res.json()) as T[]))
+    url = res.headers.get('link')?.match(/<([^>]+)>;\s*rel="next"/)?.[1] ?? null
+  }
+  return out
 }
 
 export interface GithubUser {
@@ -76,9 +93,8 @@ export function createDeployKey(token: string, repo: string, title: string, key:
 }
 
 // the container's read/write key and its read-only config key share a title (same repo when the config repo is the project repo), so readOnly tells them apart; every match, because a removal that failed earlier leaves a duplicate with the same title
-// ponytail: first page only (100 keys), a paginated lookup if a repo ever carries more
 export async function findDeployKeys(token: string, repo: string, title: string, readOnly: boolean): Promise<{ id: number }[]> {
-  return (await gh<{ id: number; title: string; read_only: boolean }[]>(token, `/repos/${repo}/keys?per_page=100`)).filter((k) => k.title === title && k.read_only === readOnly)
+  return (await ghAll<{ id: number; title: string; read_only: boolean }>(token, `/repos/${repo}/keys?per_page=100`)).filter((k) => k.title === title && k.read_only === readOnly)
 }
 
 export function deleteDeployKey(token: string, repo: string, id: number): Promise<void> {

@@ -114,13 +114,15 @@ test('stack failure deletes the key and keeps the Portainer error', async () => 
   ])
 })
 
-test('a stack create whose response failed but that Portainer did create keeps the key', async () => {
+test('a stack create whose response failed but that Portainer did create keeps the key and the container, with a warning', async () => {
   let created = false
   const { deps, log } = fakes({
     findStack: async () => (created ? { Id: 7 } : null),
     createStack: async () => { created = true; throw new Error('Portainer create stack: timeout') },
+    listContainers: async () => (created ? [row('dockbench-shop')] : []),
   })
-  await expect(deploy('shop', 'octocat/shop', deps)).rejects.toMatchObject({ message: 'Portainer create stack: timeout' })
+  const r = await deploy('shop', 'octocat/shop', deps)
+  expect(r).toMatchObject({ id: 'abc123', name: 'dockbench-shop', warning: "Portainer created the stack, but its answer was lost: Portainer create stack: timeout" })
   expect(log).toEqual(['pull', 'key'])
 })
 

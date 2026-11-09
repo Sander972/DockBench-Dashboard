@@ -5,7 +5,8 @@ export { SignedOut, StepUpRequired } from './errors'
 
 // msg is optional (handoff section 8 has none); the store falls back to gitMsg()
 export type GitResult = ExecResult & { msg?: string }
-export interface DeployResult { id: string; name: string; calls: ApiCall[] }
+// warning: Portainer created the stack but its answer to the create was lost
+export interface DeployResult { id: string; name: string; calls: ApiCall[]; warning?: string }
 
 // handoff section 9
 export interface Api {
@@ -31,7 +32,7 @@ export interface Api {
   deploy(req: DeployRequest): Promise<DeployResult>
   getTelegram(): Promise<TelegramStatus>
   // dockerGid only when the server could not read the socket's group
-  deployTelegram(token: string, dockerGid?: string): Promise<{ bot: string; calls: ApiCall[] }>
+  deployTelegram(token: string, dockerGid?: string): Promise<{ bot: string; calls: ApiCall[]; warning?: string }>
   claimTelegram(): Promise<TelegramClaim>
   updateTelegram(): Promise<UpdateResult>
   getSystem(): Promise<SystemStatus>
