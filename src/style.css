@@ -376,10 +376,6 @@ dl.facts .num{font-size:.8125rem}
 .confirm b{font-size:1rem}
 .confirm p{font-size:.875rem;color:var(--fg-2)}
 
-details.src summary{cursor:pointer;font-size:.8125rem;color:var(--fg-2);min-height:32px;display:flex;align-items:center}
-details.src ul{margin:6px 0 0;padding:0;list-style:none;display:grid;gap:8px;font-size:.75rem;color:var(--fg-2)}
-details.src code{font:.6875rem var(--f-num);color:var(--fg);overflow-wrap:anywhere}
-
 .placeholder{padding:48px 24px;text-align:center;color:var(--fg-2)}
 
 /* ---------- activity / settings ---------- */
@@ -504,7 +500,7 @@ fieldset.set + fieldset.set{border-top:1px solid var(--line-2)}
 }
 @media (max-width:420px){.top .host{display:none}}
 @media (pointer:fine){.search{height:36px}.sort select{height:36px}.btn.sm{min-height:36px}}
-@media not (pointer:fine){.search,.sort select,.tabs-top button{height:44px}details.src summary,.dsec details summary,.seg span,.feed-h button{min-height:44px}}
+@media not (pointer:fine){.search,.sort select,.tabs-top button{height:44px}.dsec details summary,.seg span,.feed-h button{min-height:44px}}
 @media (prefers-reduced-motion:reduce){
   .led.blink,.sk,.poll .led.flash{animation:none}
   .otp,.otp .otp-cell,.otp-cell::before,.otp-cell::after,.dig-enter-active,.dig-leave-active{animation:none!important;transition:none}

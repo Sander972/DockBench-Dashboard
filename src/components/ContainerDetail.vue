@@ -394,21 +394,6 @@ onUpdated(() => {
             </div>
           </details>
         </section>
-
-        <section class="sec">
-          <details class="src">
-            <summary>Where these numbers come from</summary>
-            <ul>
-              <li><code>GET /containers/json?all=true&amp;filters={"label":["dockbench=true"]}</code><br>state, every {{ prefs.poll }}s</li>
-              <li><code>GET /containers/{{ sh }}/json</code><br>started at, restart count, image; asked again when the state changes, after an action, or at most every 10s</li>
-              <li><code>GET http://dockbench-collector:9100/metrics</code><br>CPU and memory from the collector's cgroup sample, one call per tick for every container</li>
-              <li><code>GET /system/df</code><br>writable layer and /home/dev volume size, at most every 15 minutes</li>
-              <li><code>GET http://{{ c.name }}:8080/status</code><br>git, tunnel, tools. Inside devnet only. One request at a time; a poll waits up to 2s for it, then shows the last answer.</li>
-              <li><code>GET /containers/{{ sh }}/logs?stdout=true&amp;stderr=true&amp;tail=100</code><br>log, on open, when the Log row unfolds, on Refresh and every 3s with Auto-refresh on; device codes and the fatal line while starting or in a restart loop</li>
-              <li><code>POST /images/create?fromImage={{ c.image }}</code> through Portainer<br>pulls the newest image with Portainer's registry credentials, every 30 minutes or on Check for update; a different image id than the container's means an update</li>
-            </ul>
-          </details>
-        </section>
       </div>
     </template>
   </div>
