@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { demux, execRun, logLines, splitImage } from './docker'
+import { demux, dockerInfo, execRun, inspectContainer, logLines, splitImage } from './docker'
 
 const frame = (stream: number, s: string) => {
   const p = Buffer.from(s)
@@ -61,4 +61,31 @@ test('splitImage handles registry, tag and defaults', () => {
   expect(splitImage('nginx:1.27')).toEqual({ name: 'nginx', tag: '1.27', registry: 'docker.io' })
   expect(splitImage('library/nginx')).toEqual({ name: 'library/nginx', tag: 'latest', registry: 'docker.io' })
   expect(splitImage('localhost:5000/x/y:dev')).toEqual({ name: 'localhost:5000/x/y', tag: 'dev', registry: 'localhost:5000' })
+})
+
+test('splitImage takes a digest as the ref and never a tag', () => {
+  const d = 'sha256:' + 'a'.repeat(64)
+  expect(splitImage(`nginx@${d}`)).toEqual({ name: 'nginx', tag: d, registry: 'docker.io' })
+  expect(splitImage(`ghcr.io/sander972/dockbench@${d}`)).toEqual({ name: 'ghcr.io/sander972/dockbench', tag: d, registry: 'ghcr.io' })
+  expect(splitImage(`localhost:5000/x/y:dev@${d}`)).toEqual({ name: 'localhost:5000/x/y', tag: d, registry: 'localhost:5000' })
+})
+
+test('dockerInfo gives up on a daemon that never answers', async () => {
+  const hung = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) })
+  try {
+    const started = performance.now()
+    expect(await dockerInfo(`http://localhost:${hung.port}`, 100).then(() => 'answered', (e: Error) => e.name)).toBe('TimeoutError')
+    expect(performance.now() - started).toBeLessThan(2000)
+  } finally {
+    hung.stop(true)
+  }
+})
+
+test('inspect maps Docker zero start time of a never started container to null', async () => {
+  const fake = Bun.serve({ port: 0, fetch: () => Response.json({ Image: 'sha256:a', State: { Status: 'created', StartedAt: '0001-01-01T00:00:00Z', FinishedAt: '0001-01-01T00:00:00Z', ExitCode: 0 }, RestartCount: 0, HostConfig: { Memory: 0 }, Config: { Env: [], Image: 'x' } }) })
+  try {
+    expect((await inspectContainer(`http://localhost:${fake.port}`, 'c1')).startedAt).toBeNull()
+  } finally {
+    fake.stop(true)
+  }
 })

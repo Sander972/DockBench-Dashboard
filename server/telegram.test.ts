@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { botName, dockerGid, getMe, setupCode, telegramEnv, validToken } from './telegram'
+import { botName, dockerGid, getMe, parseGid, setupCode, telegramEnv, validToken } from './telegram'
 
 const TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw'
 
@@ -52,4 +52,12 @@ test('botName asks Telegram with the container own token, once per container, ne
   expect(await botName(host, 'c1', tg)).toBe('realbot')
   expect(asked).toEqual([`https://api.telegram.org/bot${TOKEN}/getMe`])
   docker.stop()
+})
+
+test('parseGid takes a whole number or a digit string, reads blank as not given and anything else as invalid', () => {
+  expect(parseGid(999)).toBe(999)
+  expect(parseGid('999')).toBe(999)
+  expect(parseGid(0)).toBe(0)
+  for (const v of [undefined, null, '']) expect(parseGid(v)).toBeNull()
+  for (const v of ['abc', ' ', '1e3', '-1', -1, 1.5, false, true, [], {}]) expect(parseGid(v)).toBe('invalid')
 })

@@ -29,6 +29,8 @@ export function validateDeploy(body: unknown, defaultImage: string): { ok: true;
   if (!PROJECT_RE.test(value.project)) return { ok: false, error: 'project must match ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$' }
   if (value.project === 'telegram') return { ok: false, error: 'project telegram is taken by the Telegram bot' }
   if (!value.gitUserName) return { ok: false, error: 'gitUserName is required' }
+  // both end up in the stack env and in git config, where a newline would add lines
+  for (const k of ['gitUserName', 'gitUserEmail'] as const) if (/[\x00-\x1f\x7f]/.test(value[k])) return { ok: false, error: `${k} must be one line without control characters` }
   if (!value.gitUserEmail.includes('@')) return { ok: false, error: 'gitUserEmail must be an email' }
   if (/\s/.test(value.image)) return { ok: false, error: 'image must not contain spaces' }
   return { ok: true, value }

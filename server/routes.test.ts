@@ -71,6 +71,14 @@ test('telegram deploy with a malformed token answers 400 before calling Telegram
   expect(((await res.json()) as { error: string }).error).toBe('token must be the one @BotFather gave, like 123456789:AAH…')
 })
 
+test('telegram deploy with a typed Docker group id that is not a whole number answers 400 before calling Telegram', async () => {
+  for (const dockerGid of ['abc', -1, 1.5, false, [], ' ']) {
+    const res = await fetch(`${base}/api/telegram/deploy`, { method: 'POST', headers: { cookie: session, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: JSON.stringify({ token: '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw', dockerGid }) })
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toBe('Docker group id must be a whole number')
+  }
+})
+
 test('a cookie signed with another secret, an unknown id, an idle record or the old three-part format is refused', async () => {
   const { touch } = await import('./sessions')
   const id = session.slice('session='.length).split('.')[0]
@@ -87,7 +95,7 @@ test('start redirects to GitHub and sets the state cookie', async () => {
   expect(res.status).toBe(302)
   const location = res.headers.get('location')!
   expect(location.startsWith('https://github.com/login/oauth/authorize?')).toBe(true)
-  expect(location).toContain('scope=repo+read%3Auser&')
+  expect(location).toContain('scope=repo+workflow+read%3Auser&')
   expect(location).toContain(encodeURIComponent('http://localhost:5173/api/auth/github/callback'))
   expect(res.headers.get('set-cookie')).toContain('oauth_state=')
 })
@@ -248,6 +256,38 @@ test('static route serves the app and never a file outside STATIC_DIR', async ()
   for (const path of ['/../secret.txt', '/%2e%2e/secret.txt', '/..%2fsecret.txt', '/x/..%2f..%2fsecret.txt']) {
     const res = await fetch(base + path)
     expect(await res.text()).not.toBe('secret')
+  }
+})
+
+test('a malformed or NUL path answers 4xx without the static dir in the body', async () => {
+  for (const path of ['/%zz', '/%00', '/assets/%E0%A4%A']) {
+    const res = await fetch(base + path)
+    expect(res.status).toBeGreaterThanOrEqual(400)
+    expect(res.status).toBeLessThan(500)
+    expect(await res.text()).not.toContain(staticDir)
+  }
+})
+
+test('a cookie whose signature has the right length in characters but not in bytes answers 401, not 500', async () => {
+  const id = session.slice('session='.length).split('.')[0]
+  const res = await fetch(`${base}/api/session`, { headers: { cookie: `session=${id}.\u00e9${'a'.repeat(42)}` } })
+  expect(res.status).toBe(401)
+})
+
+test('a container removed between the list and its inspect is left out, not a 500', async () => {
+  dockerFake = (req) => {
+    const u = new URL(req.url)
+    if (u.pathname === '/containers/json') return Response.json([{ Id: 'g1', Names: ['/dockbench-kept'], State: 'exited', Image: 'x' }, { Id: 'g2', Names: ['/dockbench-gone'], State: 'exited', Image: 'x' }])
+    if (u.pathname === '/containers/g1/json') return Response.json({ Image: 'sha256:a', State: { Status: 'exited', StartedAt: '2026-11-08T10:00:00Z', FinishedAt: '2026-11-08T11:00:00Z', ExitCode: 0 }, RestartCount: 0, HostConfig: { Memory: 0 }, Config: { Env: [], Image: 'x', Labels: {} }, Mounts: [] })
+    if (u.pathname === '/containers/g2/json') return Response.json({ message: 'No such container: g2' }, { status: 404 })
+    return new Response('down', { status: 500 })
+  }
+  try {
+    const res = await fetch(`${base}/api/containers`, { headers: { cookie: session } })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { id: string }[]).map((r) => r.id)).toEqual(['g1'])
+  } finally {
+    dockerFake = null
   }
 })
 

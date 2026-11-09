@@ -16,8 +16,10 @@ export const signCookie = (secret: string, id: string) => `${id}.${sign(secret, 
 export function parseCookie(secret: string, cookie: string | undefined | null): string | null {
   const parts = (cookie ?? '').split('.')
   if (parts.length !== 2 || !parts[0] || !parts[1]) return null
-  const want = sign(secret, parts[0])
-  if (parts[1].length !== want.length || !timingSafeEqual(Buffer.from(parts[1]), Buffer.from(want))) return null
+  const got = Buffer.from(parts[1])
+  const want = Buffer.from(sign(secret, parts[0]))
+  // compared by bytes: timingSafeEqual throws on a byte-length mismatch, which a non-ASCII signature of the right string length would cause
+  if (got.length !== want.length || !timingSafeEqual(got, want)) return null
   return parts[0]
 }
 

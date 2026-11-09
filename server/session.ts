@@ -23,7 +23,9 @@ export function verifySession(secret: string, cookie: string | undefined | null,
   const [iat, exp, sig] = cookie.split('.')
   if (!iat || !exp || !sig) return false
   const expected = sign(secret, `${iat}.${exp}`)
-  if (sig.length !== expected.length) return false
-  if (!timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return false
+  const got = Buffer.from(sig)
+  const want = Buffer.from(expected)
+  // timingSafeEqual throws on a byte-length mismatch, which a non-ASCII signature of the right string length would cause
+  if (got.length !== want.length || !timingSafeEqual(got, want)) return false
   return Number(exp) > now
 }

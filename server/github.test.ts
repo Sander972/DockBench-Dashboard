@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from 'bun:test'
-import { authorizeUrl, fetchRepos, noreplyEmail, normalizeRepo } from './github'
+import { authorizeUrl, fetchRepos, noreplyEmail, normalizeRepo, sameLogin } from './github'
 
 test('fetchRepos lists only repos the token can add a deploy key to', async () => {
   const row = (full_name: string, admin?: boolean) => ({ full_name, private: true, language: null, default_branch: 'main', pushed_at: '', description: null, ...(admin === undefined ? {} : { permissions: { admin } }) })
@@ -32,4 +32,9 @@ test('normalizeRepo accepts every REPO_URL form the image accepts', () => {
   expect(normalizeRepo('https://gitlab.com/a/b')).toBeNull()
   expect(normalizeRepo('')).toBeNull()
   expect(normalizeRepo(undefined)).toBeNull()
+})
+
+test('sameLogin ignores case, as GitHub logins do', () => {
+  expect(sameLogin('OctoCat', 'octocat')).toBe(true)
+  expect(sameLogin('octocat', 'octocat2')).toBe(false)
 })

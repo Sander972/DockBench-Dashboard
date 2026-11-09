@@ -2,6 +2,9 @@
 export const OAUTH_SCOPES = 'repo workflow read:user'
 const API = 'https://api.github.com'
 
+// GitHub logins are case-insensitive, so GITHUB_LOGIN=OctoCat must admit octocat
+export const sameLogin = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+
 export function authorizeUrl(clientId: string, redirectUri: string, state: string): string {
   const q = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri, scope: OAUTH_SCOPES, state })
   return `https://github.com/login/oauth/authorize?${q}`

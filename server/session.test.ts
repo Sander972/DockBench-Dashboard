@@ -10,6 +10,11 @@ test('a fresh session verifies and has three parts', () => {
   expect(verifySession(secret, cookie)).toBe(true)
 })
 
+test('a signature of the right length in characters but not in bytes fails instead of throwing', () => {
+  const [iat, exp, sig] = createSession(secret).split('.')
+  expect(verifySession(secret, `${iat}.${exp}.\u00e9${sig.slice(1)}`)).toBe(false)
+})
+
 test('a tampered signature, issued time or expiry fails', () => {
   const [iat, exp, sig] = createSession(secret).split('.')
   const flipped = (sig[0] === 'a' ? 'b' : 'a') + sig.slice(1)

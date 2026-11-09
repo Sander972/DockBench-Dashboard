@@ -4,11 +4,11 @@ import { env } from './env'
 import { device, HttpError, json } from './http'
 import { createSession, SESSION_TTL_SECONDS, verifySession } from './session'
 import { verifyTotp } from './totp'
-import { authorizeUrl, createDeployKey, deleteDeployKey, exchangeCode, findDeployKeys, fetchRepos, fetchUser, normalizeRepo, noreplyEmail } from './github'
+import { authorizeUrl, createDeployKey, deleteDeployKey, exchangeCode, findDeployKeys, fetchRepos, fetchUser, normalizeRepo, noreplyEmail, sameLogin } from './github'
 import { appendEvent, LIMIT_RANGES, readAccount, readEvents, readSettings, writeAccount, writeSettings, type Account, type ActivityEvent, type ApiCall, type Settings } from './store'
 import { createSessionRecord, enforceLimit, findAlive, listSessions, parseCookie, revoke, revokeAll, signCookie, touch, type SessionLimits } from './sessions'
 import { createLive } from './live'
-import { containerByName, containerLogs, containerPost, dockerInfo, execRun, imageInspect, inspectContainer, listDockbench, removeContainer, removeVolume, stackVolumes, systemDf } from './docker'
+import { containerByName, containerLogs, containerPost, dockerInfo, execRun, imageInspect, inspectContainer, listDockbench, removeContainer, removeVolume, stackVolumes, systemDf, unlessGone } from './docker'
 import { diskUsage } from './host'
 import { createCollector, history as collectorHistory, WINDOWS, type Window } from './collector'
 import { cpusetFor, createStack, deleteStack, findStack, fromStackFile, patchEnv, pullImage, putStack, readStack, redeployStack, STACK_FILE, stackEnv, TELEGRAM_STACK_FILE, vscodeEnv } from './portainer'
@@ -16,7 +16,7 @@ import { deploy, DeployFailure, REPO_RE, validateDeploy } from './deploy'
 import { deleteKeys, keyTitle, removeStack, stackKeys } from './remove'
 import { generateDeployKey } from './sshkey'
 import { deviceCode, fetchStatus, imageChecker, inspectCache, lastError, shared, statusTracker, ttlCache, updateAvailable } from './containers'
-import { botName, dockerGid, fetchBotStatus, getMe, setupCode, telegramEnv, TELEGRAM_IMAGE, TELEGRAM_NAME, validToken, type BotStatus } from './telegram'
+import { botName, dockerGid, fetchBotStatus, getMe, parseGid, setupCode, telegramEnv, TELEGRAM_IMAGE, TELEGRAM_NAME, validToken, type BotStatus } from './telegram'
 import { BOOT_ID, COLLECTOR_NAME, DASHBOARD_NAME, imageRow } from './system'
 import { runsCache, summarize } from './actions'
 import { CONFIG_DIFF_MAX, configDiffCmd, configPullCmd, lastLine, loginCodeCmd, loginStartCmd, loginUrl, logoutCmd, parseConfigDiff } from './claude'
@@ -283,10 +283,10 @@ function containerAction(a: 'start' | 'stop' | 'restart') {
 // name of the dockbench container cloned from each repo, keyed by lowercase owner/name
 async function deployedRepos(): Promise<Map<string, string>> {
   const rows = await listDockbench(env.dockerHost)
-  const inspected = await Promise.all(rows.map((r) => inspectContainer(env.dockerHost, r.id)))
+  const inspected = await Promise.all(rows.map((r) => unlessGone(inspectContainer(env.dockerHost, r.id))))
   const map = new Map<string, string>()
   rows.forEach((r, i) => {
-    const repo = normalizeRepo(inspected[i].repoUrl)
+    const repo = normalizeRepo(inspected[i]?.repoUrl ?? null)
     if (repo) map.set(repo, r.name)
   })
   return map
@@ -311,8 +311,9 @@ async function containersView() {
   const df = diskSizes()
   const fetched = await lastFetches()
   inspects.keep(rows.map((r) => r.id))
-  return Promise.all(rows.map(async (r) => {
-    const x = await inspects.get(r.id, r.state)
+  const views = await Promise.all(rows.map(async (r) => {
+    const x = await unlessGone(inspects.get(r.id, r.state))
+    if (!x) return null
     const running = r.state === 'running'
     const s = running ? snap?.containers.find((c) => c.id === r.id) : undefined
     const sv = await statusView(r.id, r.name, x.startedAt, running)
@@ -338,6 +339,7 @@ async function containersView() {
       config: x.config,
     }
   }))
+  return views.filter((v) => v !== null)
 }
 
 // the SSE feed: hostView never throws, containersView throws when Docker is down, which the feed reports as a `down` event
@@ -373,7 +375,7 @@ export const routes = {
       await log(req, server, 'Sign-in failed', 'github', { ok: false, note: (e as Error).message })
       return Response.redirect('/sign-in?error=oauth')
     }
-    if (user.login !== env.githubLogin) {
+    if (!sameLogin(user.login, env.githubLogin)) {
       await log(req, server, 'Sign-in failed', user.login, { ok: false, note: 'not the allowed account' })
       return Response.redirect(`/sign-in?error=denied&login=${encodeURIComponent(user.login)}`)
     }
@@ -925,7 +927,7 @@ export const routes = {
     POST: auth(async (req: BunRequest<'/api/images/check'>, server) => {
       server.timeout(req, 0)
       const rows = await listDockbench(env.dockerHost)
-      const refs = [...new Set((await Promise.all(rows.map((r) => inspectContainer(env.dockerHost, r.id)))).map((x) => x.image).filter((ref) => !ref.includes('@')))]
+      const refs = [...new Set((await Promise.all(rows.map((r) => unlessGone(inspectContainer(env.dockerHost, r.id))))).flatMap((x) => (x && !x.image.includes('@') ? [x.image] : [])))]
       return json(await Promise.all(refs.map(async (image) => ({ image, ...(await images.check(image)) }))))
     }),
   },
@@ -1025,7 +1027,7 @@ export const routes = {
       // ponytail: "starting" for the first 30 s after a start, then "dead"; a tracker like statusTracker if that misleads
       status = await fetchBotStatus(botStatusUrl).catch(() => null)
       if (status) status.bot = await botName(env.dockerHost, c.id).catch(() => '') // '' hides the t.me links until Telegram answers
-      if (!status) statusError = Date.now() - Date.parse(x.startedAt) < 30_000 ? 'starting' : 'dead'
+      if (!status) statusError = x.startedAt && Date.now() - Date.parse(x.startedAt) < 30_000 ? 'starting' : 'dead'
     }
     const check = images.peek(x.image)
     return json({ deployed: true, state: c.state, startedAt: x.startedAt, image: x.image, imageUpdate: updateAvailable(x.image, check?.imageId ?? null, x.imageId), status, statusError, now: new Date().toISOString() })
@@ -1039,12 +1041,13 @@ export const routes = {
       const body = (await req.json().catch(() => null)) as { token?: unknown; dockerGid?: unknown } | null
       if (!validToken(body?.token)) return json({ error: 'token must be the one @BotFather gave, like 123456789:AAH…' }, 400)
       const token = body.token.trim()
+      const given = parseGid(body.dockerGid)
+      if (given === 'invalid') return json({ error: 'Docker group id must be a whole number' }, 400)
       const { calls, step } = tracer()
       const started = Date.now()
       try {
         const bot = await step('GET', '/getMe', 200, () => getMe(token))
-        const given = Number(body.dockerGid)
-        const gid = (await dockerGid(env.dockerHost)) ?? (body.dockerGid != null && Number.isInteger(given) && given >= 0 ? given : null)
+        const gid = (await dockerGid(env.dockerHost)) ?? given
         if (gid === null) throw new HttpError(400, 'The Docker socket group id could not be read here. Enter it under Docker group id: run stat -c %g /var/run/docker.sock on the VPS.')
         if (await step('GET', '/containers/json', 200, () => containerByName(env.dockerHost, TELEGRAM_NAME))) throw new HttpError(409, `Container ${TELEGRAM_NAME} already exists`)
         if (await step('GET', '/api/stacks', 200, () => findStack(portainer, TELEGRAM_NAME))) throw new HttpError(409, `Stack ${TELEGRAM_NAME} already exists. Remove it in Portainer to deploy again.`)
@@ -1151,8 +1154,13 @@ export const routes = {
 
   // ponytail: no directory check. Vite hashes /assets/ names, so those are cached for good; the shell, sw.js, the manifest and the icons are revalidated on every load, so a deploy is picked up at once.
   '/*': async (req: BunRequest<'/*'>) => {
-    const path = decodeURIComponent(new URL(req.url).pathname)
-    if (path.includes('..')) return new Response('Not found', { status: 404 })
+    let path: string
+    try {
+      path = decodeURIComponent(new URL(req.url).pathname)
+    } catch {
+      return new Response('Bad request', { status: 400 })
+    }
+    if (path.includes('..') || path.includes('\0')) return new Response('Not found', { status: 404 })
     const file = Bun.file(join(env.staticDir, path))
     const headers = { 'cache-control': path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache' }
     if (path !== '/' && (await file.exists())) return new Response(file, { headers })

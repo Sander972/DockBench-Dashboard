@@ -42,7 +42,7 @@ export interface StatusView {
 }
 
 interface Track {
-  startedAt: string
+  startedAt: string | null
   status: DevContainerStatus | null
   fetchedAt: string | null
   answered: boolean
@@ -55,7 +55,7 @@ interface Track {
 // One /status request per container at a time, whatever the number of tabs polling, and none sooner than minMs after the last one settled: the 2 s live tick would otherwise ask every container on every tick for facts (branch, dirty count, tunnel) that change over seconds. A poll waits up to waitMs for the answer, otherwise it reports what is known and the request carries on for the next poll. "starting" until /status answers once since the container (re)started (a restart asks at once), "dead" when it answered before and fails now. ponytail: in memory, so after a dashboard restart a dead status server shows as starting.
 export function statusTracker(fetchStatus: (name: string) => Promise<DevContainerStatus>, waitMs = 2000, minMs = 5000) {
   const tracks = new Map<string, Track>()
-  return async function view(id: string, name: string, startedAt: string, running: boolean): Promise<StatusView> {
+  return async function view(id: string, name: string, startedAt: string | null, running: boolean): Promise<StatusView> {
     let t = tracks.get(id)
     if (t && running && t.startedAt !== startedAt) t = { ...t, startedAt, answered: false, failed: false, inflight: null, settled: 0 }
     if (!t) t = { startedAt, status: null, fetchedAt: null, answered: false, failed: false, inflight: null, settled: 0 }

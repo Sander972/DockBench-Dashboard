@@ -27,7 +27,8 @@ export async function containerByName(host: string, name: string): Promise<Conta
 }
 
 export interface Inspect {
-  startedAt: string
+  // null for a container that was created but never started
+  startedAt: string | null
   finishedAt: string | null
   exitCode: number | null
   restartCount: number
@@ -46,14 +47,22 @@ export interface Inspect {
 
 const ZERO_TIME = '0001-01-01T00:00:00Z'
 
+// inspect answered 404: the container was removed after it was listed
+export class ContainerGone extends Error {
+  constructor(id: string) { super(`Container ${id.slice(0, 12)} is gone`) }
+}
+// null for a container removed between the list and its inspect, so one removal does not fail a whole list
+export const unlessGone = <T>(p: Promise<T>): Promise<T | null> => p.catch((e) => { if (e instanceof ContainerGone) return null; throw e })
+
 export async function inspectContainer(host: string, id: string): Promise<Inspect> {
   const res = await dockerFetch(host, `/containers/${id}/json`)
+  if (res.status === 404) throw new ContainerGone(id)
   if (!res.ok) throw new Error(`Docker inspect returned ${res.status}`)
   const c = (await res.json()) as { Image: string; State: { Status: string; StartedAt: string; FinishedAt: string; ExitCode: number }; RestartCount: number; HostConfig: { Memory: number }; Config: { Env: string[]; Image: string; Labels?: Record<string, string> | null }; Mounts?: { Destination: string; Name?: string }[] }
   const env = Object.fromEntries(c.Config.Env.map((e) => e.split(/=(.*)/s).slice(0, 2)))
   const exited = c.State.Status === 'exited' || c.State.Status === 'dead'
   return {
-    startedAt: c.State.StartedAt,
+    startedAt: c.State.StartedAt === ZERO_TIME ? null : c.State.StartedAt,
     finishedAt: c.State.FinishedAt === ZERO_TIME ? null : c.State.FinishedAt,
     exitCode: exited ? c.State.ExitCode : null,
     restartCount: c.RestartCount,
@@ -180,19 +189,23 @@ export interface DockerInfo {
   dockerVersion: string
 }
 
-export async function dockerInfo(host: string): Promise<DockerInfo> {
-  const res = await dockerFetch(host, '/info')
+// a hung dockerd would otherwise stall deploy, config and /api/host; callers read a failure as core count unknown
+export async function dockerInfo(host: string, timeoutMs = 10_000): Promise<DockerInfo> {
+  const res = await dockerFetch(host, '/info', { signal: AbortSignal.timeout(timeoutMs) })
   if (!res.ok) throw new Error(`Docker info returned ${res.status}`)
   const i = (await res.json()) as { Name: string; NCPU: number; MemTotal: number; ServerVersion: string }
   return { name: i.Name, ncpu: i.NCPU, memTotal: i.MemTotal, dockerVersion: i.ServerVersion }
 }
 
+// tag is what images/create takes as its tag parameter: the tag, or the digest of a repo@sha256:… reference (which wins over a tag in repo:tag@sha256:…)
 export function splitImage(image: string): { name: string; tag: string; registry: string } {
-  const slash = image.lastIndexOf('/')
-  const colon = image.lastIndexOf(':')
+  const at = image.indexOf('@')
+  const ref = at < 0 ? image : image.slice(0, at)
+  const slash = ref.lastIndexOf('/')
+  const colon = ref.lastIndexOf(':')
   const hasTag = colon > slash
-  const name = hasTag ? image.slice(0, colon) : image
-  const tag = hasTag ? image.slice(colon + 1) : 'latest'
+  const name = hasTag ? ref.slice(0, colon) : ref
+  const tag = at >= 0 ? image.slice(at + 1) : hasTag ? ref.slice(colon + 1) : 'latest'
   const first = name.split('/')[0]
   const registry = name.includes('/') && (first.includes('.') || first.includes(':') || first === 'localhost') ? first : 'docker.io'
   return { name, tag, registry }

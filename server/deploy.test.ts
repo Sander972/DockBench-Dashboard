@@ -34,6 +34,9 @@ test('validateDeploy rejects bad input with a reason', () => {
   expect(bad({ ...good, gitUserName: '' })).toBe('gitUserName is required')
   expect(bad({ ...good, gitUserEmail: 'nope' })).toBe('gitUserEmail must be an email')
   expect(bad({ ...good, image: 'a b' })).toBe('image must not contain spaces')
+  expect(bad({ ...good, gitUserName: 'Ale\n[core]' })).toBe('gitUserName must be one line without control characters')
+  expect(bad({ ...good, gitUserName: 'Ale\u0007' })).toBe('gitUserName must be one line without control characters')
+  expect(bad({ ...good, gitUserEmail: 'a@b.c\rx' })).toBe('gitUserEmail must be one line without control characters')
 })
 
 const row = (name: string): ContainerRow => ({ id: 'abc123', name, state: 'running', image: IMG })

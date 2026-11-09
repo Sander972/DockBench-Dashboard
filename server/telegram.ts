@@ -42,6 +42,14 @@ export async function dockerGid(host: string): Promise<number | null> {
   return stat(host).then((s) => s.gid, () => null)
 }
 
+// the Docker group id typed on the Telegram page: null when not given, 'invalid' for anything but a whole number or a digit string (Number('') and Number(false) are 0, which would mean root's group)
+export function parseGid(v: unknown): number | null | 'invalid' {
+  if (v === undefined || v === null || v === '') return null
+  if (typeof v === 'number') return Number.isInteger(v) && v >= 0 ? v : 'invalid'
+  if (typeof v === 'string' && /^\d+$/.test(v)) return Number(v)
+  return 'invalid'
+}
+
 // every boot without an owner logs a new code, so the last one is the live one
 export function setupCode(lines: string[]): string | null {
   for (let i = lines.length - 1; i >= 0; i--) {

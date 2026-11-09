@@ -9,6 +9,11 @@ const who = { device: 'Linux · Chrome', ip: '10.0.0.1' }
 const DAY = 24 * 3600 * 1000
 const fresh = () => mkdtemp(join(tmpdir(), 'dockbench-sessions-'))
 
+test('cookie: a signature of the right length in characters but not in bytes is refused, not thrown', () => {
+  const sig = signCookie(secret, 'abc').split('.')[1]
+  expect(parseCookie(secret, `abc.\u00e9${sig.slice(1)}`)).toBeNull()
+})
+
 test('cookie: id round-trips, a tampered id or signature or another secret fails, the old three-part format fails', () => {
   const c = signCookie(secret, 'abc')
   expect(c.split('.')).toHaveLength(2)
