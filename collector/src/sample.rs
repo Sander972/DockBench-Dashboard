@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 /// Microseconds of CPU time per jiffy (USER_HZ is 100 on Linux).
 const USEC_PER_JIFFY: u64 = 10_000;
 const NAMES_EVERY: Duration = Duration::from_secs(10);
+/// How long an id Docker did not list is not asked about again (the 10 s refresh still runs).
+const MISS_FOR: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,6 +82,7 @@ pub struct Sampler {
     prev: Option<Raw>,
     names: HashMap<String, ContainerInfo>,
     names_at: Option<Instant>,
+    misses: HashMap<String, Instant>,
     walker: procs::Walker,
     cfg: SamplerCfg,
 }
@@ -90,16 +93,18 @@ fn pct(part: u64, whole: u64) -> f64 {
 
 impl Sampler {
     pub fn new(cfg: SamplerCfg) -> Sampler {
-        Sampler { prev: None, names: HashMap::new(), names_at: None, walker: procs::Walker::default(), cfg }
+        Sampler { prev: None, names: HashMap::new(), names_at: None, misses: HashMap::new(), walker: procs::Walker::default(), cfg }
     }
 
-    /// Refreshes the id → name map every 10 s or when a cgroup id is unknown; a failed refresh keeps the old map, and a name stays while its cgroup still exists.
+    /// Refreshes the id → name map every 10 s or when a cgroup id is unknown and was not missed in the last minute; a failed refresh keeps the old map, and a name stays while its cgroup still exists.
     fn refresh_names(&mut self, cgs: &[CgRaw]) {
         let due = self.names_at.is_none_or(|t| t.elapsed() >= NAMES_EVERY);
-        if !due && cgs.iter().all(|c| self.names.contains_key(&c.id)) {
+        let known = |id: &String| self.names.contains_key(id) || self.misses.get(id).is_some_and(|t| t.elapsed() < MISS_FOR);
+        if !due && cgs.iter().all(|c| known(&c.id)) {
             return;
         }
-        self.names_at = Some(Instant::now());
+        let now = Instant::now();
+        self.names_at = Some(now);
         if let Ok(list) = docker::list_containers(&self.cfg.docker_sock) {
             let mut names: HashMap<String, ContainerInfo> = list.into_iter().map(|c| (c.id.clone(), c)).collect();
             for c in cgs {
@@ -109,6 +114,7 @@ impl Sampler {
             }
             self.names = names;
         }
+        self.misses = cgs.iter().filter(|c| !self.names.contains_key(&c.id)).map(|c| (c.id.clone(), now)).collect();
     }
 
     /// Reads one sample; `None` on the first call (no deltas yet) or when the host files cannot be read.
@@ -205,6 +211,35 @@ mod tests {
         // the container was recreated: its counter starts low again
         world(&p, &c, &id, 2600, 500, 220);
         assert_eq!(s.tick().unwrap().containers[0].cpu_pct, 0.0);
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn an_id_docker_does_not_know_is_asked_again_only_after_a_minute() {
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let d = tempdir("sampler-miss");
+        let sock = d.join("docker.sock");
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let asked = Arc::new(AtomicUsize::new(0));
+        let n = asked.clone();
+        std::thread::spawn(move || {
+            for mut s in l.incoming().flatten() {
+                let _ = s.read(&mut [0u8; 1024]);
+                n.fetch_add(1, Ordering::SeqCst);
+                let _ = s.write_all(b"HTTP/1.0 200 OK\r\n\r\n[]");
+            }
+        });
+        let mut s = Sampler::new(SamplerCfg { proc_root: d.join("proc"), cg_root: d.join("cg"), docker_sock: sock, interval_ms: 2000 });
+        let cgs = vec![CgRaw { id: "f".repeat(64), cpu_usec: 0, mem_current: 0, inactive_file: 0, mem_max: None }];
+        s.refresh_names(&cgs);
+        s.refresh_names(&cgs);
+        assert_eq!(asked.load(Ordering::SeqCst), 1, "the miss is remembered");
+        let old = Instant::now().checked_sub(Duration::from_secs(61)).unwrap();
+        s.misses.values_mut().for_each(|t| *t = old);
+        s.refresh_names(&cgs);
+        assert_eq!(asked.load(Ordering::SeqCst), 2, "asked again after a minute");
         fs::remove_dir_all(d).unwrap();
     }
 

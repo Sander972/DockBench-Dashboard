@@ -4,7 +4,7 @@ use crate::sample::Snapshot;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -276,15 +276,23 @@ pub struct History {
 }
 
 impl History {
-    /// Loads `history.jsonl` from `dir`, keeping the points of the last `keep_ms` and skipping unparsable lines.
+    /// Loads `history.jsonl` from `dir` line by line, keeping the points of the last `keep_ms` and skipping unparsable lines (bytes, so a line that is not UTF-8 is one of them).
     pub fn open(dir: &Path, keep_ms: u64) -> History {
         let _ = fs::create_dir_all(dir);
         let file = dir.join("history.jsonl");
         let since = now_ms().saturating_sub(keep_ms);
-        let text = fs::read_to_string(&file).unwrap_or_default();
         let mut syms = Syms::default();
-        let ring = text.lines().filter_map(|l| serde_json::from_str::<Line>(l).ok()).filter(|l| l.t >= since).map(|l| Slot::pack(&mut syms, &l.into_point())).collect();
-        History { ring, syms, keep_ms, file, lines: text.lines().count() }
+        let mut ring = VecDeque::new();
+        let mut lines = 0;
+        if let Ok(f) = fs::File::open(&file) {
+            for l in BufReader::new(f).split(b'\n').map_while(Result::ok) {
+                lines += 1;
+                if let Some(l) = serde_json::from_slice::<Line>(&l).ok().filter(|l| l.t >= since) {
+                    ring.push_back(Slot::pack(&mut syms, &l.into_point()));
+                }
+            }
+        }
+        History { ring, syms, keep_ms, file, lines }
     }
 
     /// Adds a point to the ring, drops what left the window and appends one line; when the file holds more than twice the ring, it is rewritten from the ring and unused strings are dropped.
@@ -402,6 +410,11 @@ mod tests {
         let valid = std::fs::read_to_string(d.join("history.jsonl")).unwrap();
         std::fs::write(d.join("history.jsonl"), format!("not json\n{valid}")).unwrap();
         assert_eq!(History::open(&d, 60_000).ring.len(), 1, "an unparsable line is skipped");
+        let mut bytes = b"\xff\xfe not utf-8\n".to_vec();
+        bytes.extend_from_slice(valid.as_bytes());
+        std::fs::write(d.join("history.jsonl"), bytes).unwrap();
+        let r = History::open(&d, 60_000);
+        assert_eq!((r.ring.len(), r.lines), (1, 3), "a line that is not UTF-8 is skipped, not the whole file");
         std::fs::remove_dir_all(d).unwrap();
     }
 

@@ -126,14 +126,16 @@ pub fn walk(proc_root: &Path) -> Vec<ProcRaw> {
     Walker::default().walk(proc_root)
 }
 
-/// Sums `cur` per `(container, comm)`; CPU is the jiffies delta against `prev` as a share of the host's delta (0-100). A pid absent from `prev`, reused under another name or container, or whose counter went back contributes 0. Keeps entries with CPU above 0 or more than 1 MiB resident.
+/// Sums `cur` per `(container, comm)`; CPU is the jiffies delta against `prev` as a share of the host's delta (0-100). A pid absent from `prev` was born since that walk, so all its jiffies count; one reused under another name or container, or whose counter went back, contributes 0. Keeps entries with CPU above 0 or more than 1 MiB resident.
 pub fn aggregate(prev: &[ProcRaw], cur: &[ProcRaw], host_delta_jiffies: u64) -> Vec<ProcAgg> {
     let before: HashMap<u32, &ProcRaw> = prev.iter().map(|p| (p.pid, p)).collect();
     let mut groups: HashMap<(Option<&str>, &str), (Vec<u32>, u64, u64)> = HashMap::new();
     for p in cur {
         let d = match before.get(&p.pid) {
             Some(b) if b.comm == p.comm && b.container == p.container => p.jiffies.saturating_sub(b.jiffies),
-            _ => 0,
+            Some(_) => 0,
+            // known limit: a process born and gone between two walks is never seen, and a process's CPU between its last walk and its exit is lost (both still count in the container's cgroup total)
+            None => p.jiffies,
         };
         let g = groups.entry((p.container.as_deref(), p.comm.as_str())).or_default();
         g.0.push(p.pid);
@@ -244,5 +246,12 @@ mod tests {
         let prev = vec![ProcRaw { pid: 1, comm: "git".into(), jiffies: 100, rss: 0, container: None }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 900, rss: 0, container: None }];
         let cur = vec![ProcRaw { pid: 1, comm: "claude".into(), jiffies: 300, rss: 0, container: None }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 10, rss: 0, container: None }];
         assert!(aggregate(&prev, &cur, 400).is_empty());
+    }
+
+    #[test]
+    fn aggregate_counts_a_process_born_since_the_last_walk_whole() {
+        let cur = vec![ProcRaw { pid: 9, comm: "git".into(), jiffies: 40, rss: 0, container: None }];
+        let a = aggregate(&[], &cur, 400);
+        assert_eq!((a.len(), a[0].cpu_pct), (1, 10.0), "all its CPU time fell in this interval");
     }
 }
