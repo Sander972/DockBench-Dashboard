@@ -611,15 +611,16 @@ test('dashboard update pulls the collector image too and redeploys the stack whe
   }
 })
 
-test('config re-PUT adds CPUSET from the host core count, so an older stack gets the reserve without an option change; a matching CPUSET with nothing else changed still answers 409', async () => {
+test('config re-PUT adds CPUSET from the host core count, so an older stack gets the reserve without an option change; a matching CPUSET with nothing else changed, or an unknown core count, still answers 409', async () => {
   await Bun.write(join(dir, 'github.json'), JSON.stringify({ login: 'octocat', id: 1, name: null, avatar_url: '', token: 'gho_x' }))
   const image = 'ghcr.io/x/dockbench:latest'
   const older = [{ name: 'PROJECT', value: 'shop' }, { name: 'DOCKBENCH_IMAGE', value: image }, { name: 'SSH_KEY', value: 'k' }, { name: 'INSTALL_CLAUDE', value: '1' }, { name: 'CLAUDE_CONFIG_REPO', value: '' }, { name: 'CLAUDE_CONFIG_KEY', value: '' }, { name: 'VSCODE_CONFIG', value: '1' }, { name: 'VSCODE_SETTINGS', value: '' }]
   let stackEnv = older
   let put: { env: { name: string; value: string }[] } | null = null
+  let infoUp = false
   dockerFake = (req) => {
     const u = new URL(req.url)
-    if (u.pathname === '/info') return Response.json({ Name: 'vps', NCPU: 4, MemTotal: 8e9, ServerVersion: '29' })
+    if (u.pathname === '/info') return infoUp ? Response.json({ Name: 'vps', NCPU: 4, MemTotal: 8e9, ServerVersion: '29' }) : new Response('down', { status: 500 })
     // the recreated container shows up under a new id once the stack is PUT
     if (u.pathname === '/containers/json') return Response.json([{ Id: put ? 'c2' : 'c1', Names: ['/dockbench-shop'], State: 'running', Image: image }])
     if (u.pathname === '/containers/c1/json') return Response.json({ Image: 'sha256:a', State: { Status: 'running', StartedAt: '2026-11-09T10:00:00Z', FinishedAt: '0001-01-01T00:00:00Z', ExitCode: 0 }, RestartCount: 0, HostConfig: { Memory: 0 }, Config: { Env: [], Image: image, Labels: { 'com.docker.compose.project': 'dockbench-shop' } }, Mounts: [] })
@@ -637,6 +638,13 @@ test('config re-PUT adds CPUSET from the host core count, so an older stack gets
   const same = { installClaude: true, injectClaudeConfig: false, vscodeConfig: true }
   const post = () => fetch(`${base}/api/containers/c1/config`, { method: 'POST', headers: { cookie: session, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' }, body: JSON.stringify(same) })
   try {
+    // /info down (a failure is not cached): the stack keeps the CPUSET it has, so the same options still answer 409 instead of unpinning and recreating it
+    stackEnv = [...older, { name: 'CPUSET', value: '1-3' }]
+    expect((await post()).status).toBe(409)
+    expect(put).toBeNull()
+
+    infoUp = true
+    stackEnv = older
     const res = await post()
     expect(res.status).toBe(200)
     expect(put!.env).toContainEqual({ name: 'CPUSET', value: '1-3' })

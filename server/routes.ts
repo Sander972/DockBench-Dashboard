@@ -710,7 +710,9 @@ export const routes = {
           const oldValue = cur.get('CLAUDE_CONFIG_REPO') ?? ''
           const oldRepo = normalizeRepo(oldValue)
           const patch = [{ name: 'INSTALL_CLAUDE', value: b.installClaude ? '1' : '0' }]
-          patch.push({ name: 'CPUSET', value: cpusetFor((await info().catch(() => null))?.ncpu ?? 0) })
+          // an unknown core count keeps the stack's CPUSET, so a failed /info neither unpins the container nor recreates it
+          const ncpu = (await info().catch(() => null))?.ncpu
+          if (ncpu) patch.push({ name: 'CPUSET', value: cpusetFor(ncpu) })
           // the settings the stack carries change only with its VS Code option, so toggling another option keeps them
           if (b.vscodeConfig !== (cur.get('VSCODE_CONFIG') !== '0')) patch.push(...vscodeEnv(b.vscodeConfig as boolean, settings.vscodeSettings))
           if (b.injectClaudeConfig && !oldValue) {
