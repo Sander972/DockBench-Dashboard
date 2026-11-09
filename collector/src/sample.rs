@@ -13,8 +13,6 @@ use std::time::{Duration, Instant};
 /// Microseconds of CPU time per jiffy (USER_HZ is 100 on Linux).
 const USEC_PER_JIFFY: u64 = 10_000;
 const NAMES_EVERY: Duration = Duration::from_secs(10);
-/// How long an id Docker did not list twice in a row is not asked about again (the 10 s refresh still runs).
-const MISS_FOR: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +73,8 @@ pub struct SamplerCfg {
 struct Raw {
     host: HostRaw,
     cgs: Vec<CgRaw>,
+    /// the uptime in jiffies just before the process walk, `None` when unreadable
+    procs_at: Option<u64>,
     procs: Vec<ProcRaw>,
 }
 
@@ -82,8 +82,8 @@ pub struct Sampler {
     prev: Option<Raw>,
     names: HashMap<String, ContainerInfo>,
     names_at: Option<Instant>,
-    /// None after a first miss (asked again on the next tick: Docker can list a container a moment after its cgroup appears), the time of a repeat miss after that
-    misses: HashMap<String, Option<Instant>>,
+    /// false after a first miss (asked again on the next tick: Docker can list a container a moment after its cgroup appears), true after a repeat miss (then only the 10 s refresh asks again)
+    misses: HashMap<String, bool>,
     walker: procs::Walker,
     cfg: SamplerCfg,
 }
@@ -97,15 +97,14 @@ impl Sampler {
         Sampler { prev: None, names: HashMap::new(), names_at: None, misses: HashMap::new(), walker: procs::Walker::default(), cfg }
     }
 
-    /// Refreshes the id → name map every 10 s or when a cgroup id is unknown and was not missed twice in a row in the last minute; a failed refresh keeps the old map, and a name stays while its cgroup still exists.
+    /// Refreshes the id → name map every 10 s or when a cgroup id is unknown and not already missed twice in a row; a failed refresh keeps the old map, and a name stays while its cgroup still exists.
     fn refresh_names(&mut self, cgs: &[CgRaw]) {
         let due = self.names_at.is_none_or(|t| t.elapsed() >= NAMES_EVERY);
-        let known = |id: &String| self.names.contains_key(id) || self.misses.get(id).is_some_and(|t| t.is_some_and(|t| t.elapsed() < MISS_FOR));
+        let known = |id: &String| self.names.contains_key(id) || self.misses.get(id) == Some(&true);
         if !due && cgs.iter().all(|c| known(&c.id)) {
             return;
         }
-        let now = Instant::now();
-        self.names_at = Some(now);
+        self.names_at = Some(Instant::now());
         if let Ok(list) = docker::list_containers(&self.cfg.docker_sock) {
             let mut names: HashMap<String, ContainerInfo> = list.into_iter().map(|c| (c.id.clone(), c)).collect();
             for c in cgs {
@@ -116,13 +115,14 @@ impl Sampler {
             self.names = names;
         }
         let before = std::mem::take(&mut self.misses);
-        self.misses = cgs.iter().filter(|c| !self.names.contains_key(&c.id)).map(|c| (c.id.clone(), before.contains_key(&c.id).then_some(now))).collect();
+        self.misses = cgs.iter().filter(|c| !self.names.contains_key(&c.id)).map(|c| (c.id.clone(), before.contains_key(&c.id))).collect();
     }
 
     /// Reads one sample; `None` on the first call (no deltas yet) or when the host files cannot be read.
     pub fn tick(&mut self) -> Option<Snapshot> {
         let host = proc::read_host_at(&self.cfg.proc_root).ok()?;
-        let cur = Raw { host, cgs: cgroups::list(&self.cfg.cg_root), procs: self.walker.walk(&self.cfg.proc_root) };
+        let procs_at = procs::uptime_jiffies(&self.cfg.proc_root);
+        let cur = Raw { host, cgs: cgroups::list(&self.cfg.cg_root), procs_at, procs: self.walker.walk(&self.cfg.proc_root) };
         self.refresh_names(&cur.cgs);
         let Some(prev) = self.prev.replace(cur) else { return None };
         let cur = self.prev.as_ref().unwrap();
@@ -159,7 +159,7 @@ impl Sampler {
             })
             .collect();
         containers.sort_by(|x, y| x.name.cmp(&y.name));
-        let processes = procs::aggregate(&prev.procs, &cur.procs, dt)
+        let processes = procs::aggregate(&prev.procs, prev.procs_at, &cur.procs, dt)
             .into_iter()
             .map(|p| ProcSample { comm: p.comm, pids: p.pids, container: p.container.unwrap_or_else(|| "host".into()), cpu_pct: p.cpu_pct, rss: p.rss })
             .collect();
@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn an_id_docker_does_not_know_twice_is_asked_again_only_after_a_minute() {
+    fn an_id_docker_does_not_know_twice_waits_for_the_ten_second_refresh() {
         use std::io::{Read, Write};
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
@@ -240,10 +240,11 @@ mod tests {
         assert_eq!(asked.load(Ordering::SeqCst), 2, "a first miss is asked again on the next tick");
         s.refresh_names(&cgs);
         assert_eq!(asked.load(Ordering::SeqCst), 2, "a repeat miss is remembered");
-        let old = Instant::now().checked_sub(Duration::from_secs(61)).unwrap();
-        s.misses.values_mut().for_each(|t| *t = Some(old));
+        s.names_at = Instant::now().checked_sub(NAMES_EVERY);
         s.refresh_names(&cgs);
-        assert_eq!(asked.load(Ordering::SeqCst), 3, "asked again after a minute");
+        assert_eq!(asked.load(Ordering::SeqCst), 3, "asked again by the 10 s refresh");
+        s.refresh_names(&cgs);
+        assert_eq!(asked.load(Ordering::SeqCst), 3, "still a repeat miss after it");
         fs::remove_dir_all(d).unwrap();
     }
 

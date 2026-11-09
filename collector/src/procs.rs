@@ -128,16 +128,22 @@ pub fn walk(proc_root: &Path) -> Vec<ProcRaw> {
     Walker::default().walk(proc_root)
 }
 
-/// Sums `cur` per `(container, comm)`; CPU is the jiffies delta against `prev` as a share of the host's delta (0-100). A pid is the same process as in `prev` when its start time matches (a renamed process keeps counting). A new process, or a reused pid, that started after every process `prev` saw was born since that walk, so all its jiffies count; one that started earlier (the walk skipped it, or `prev` is empty because the walk failed) would count its whole lifetime, so it contributes 0, as does a counter that went back. Keeps entries with CPU above 0 or more than 1 MiB resident.
-pub fn aggregate(prev: &[ProcRaw], cur: &[ProcRaw], host_delta_jiffies: u64) -> Vec<ProcAgg> {
+/// The host's uptime from `uptime` under `proc_root`, in jiffies since boot like a process's start time (USER_HZ is 100); `None` when unreadable.
+pub fn uptime_jiffies(proc_root: &Path) -> Option<u64> {
+    let s = fs::read_to_string(proc_root.join("uptime")).ok()?;
+    let secs: f64 = s.split_whitespace().next()?.parse().ok()?;
+    Some((secs * 100.0).round() as u64)
+}
+
+/// Sums `cur` per `(container, comm)`; CPU is the jiffies delta against `prev` as a share of the host's delta (0-100). A pid is the same process as in `prev` when its start time matches (a renamed process keeps counting). A new process, or a reused pid, that started at or after `prev_at` (the uptime in jiffies when the previous walk began) was born since that walk, so all its jiffies count; one that started earlier (the walk skipped it or failed), or any unseen pid when `prev_at` is unknown, would count its whole lifetime, so it contributes 0, as does a counter that went back. Keeps entries with CPU above 0 or more than 1 MiB resident.
+pub fn aggregate(prev: &[ProcRaw], prev_at: Option<u64>, cur: &[ProcRaw], host_delta_jiffies: u64) -> Vec<ProcAgg> {
     let before: HashMap<u32, &ProcRaw> = prev.iter().map(|p| (p.pid, p)).collect();
-    let newest = prev.iter().map(|p| p.start).max();
     let mut groups: HashMap<(Option<&str>, &str), (Vec<u32>, u64, u64)> = HashMap::new();
     for p in cur {
         let d = match before.get(&p.pid) {
             Some(b) if b.start == p.start => p.jiffies.saturating_sub(b.jiffies),
             // known limit: a process born and gone between two walks is never seen, and a process's CPU between its last walk and its exit is lost (both still count in the container's cgroup total)
-            _ if newest.is_some_and(|n| p.start > n) => p.jiffies,
+            _ if prev_at.is_some_and(|t| p.start >= t) => p.jiffies,
             _ => 0,
         };
         let g = groups.entry((p.container.as_deref(), p.comm.as_str())).or_default();
@@ -239,7 +245,7 @@ mod tests {
         let c = Some("b".repeat(64));
         let prev = vec![ProcRaw { pid: 1, comm: "node".into(), jiffies: 100, rss: 0, container: c.clone(), start: 0 }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 100, rss: 0, container: c.clone(), start: 0 }];
         let cur = vec![ProcRaw { pid: 1, comm: "node".into(), jiffies: 150, rss: 4 << 20, container: c.clone(), start: 0 }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 150, rss: 4 << 20, container: c.clone(), start: 0 }, ProcRaw { pid: 3, comm: "sleep".into(), jiffies: 0, rss: 100, container: None, start: 0 }];
-        let a = aggregate(&prev, &cur, 400);
+        let a = aggregate(&prev, None, &cur, 400);
         assert_eq!(a.len(), 1);
         assert_eq!((a[0].comm.as_str(), a[0].pids.clone(), a[0].cpu_pct, a[0].rss), ("node", vec![1, 2], 25.0, 8 << 20));
     }
@@ -249,7 +255,7 @@ mod tests {
         let prev = vec![ProcRaw { pid: 1, comm: "git".into(), jiffies: 100, rss: 0, container: None, start: 10 }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 900, rss: 0, container: None, start: 10 }, ProcRaw { pid: 3, comm: "git".into(), jiffies: 500, rss: 0, container: None, start: 20 }];
         // pid 1 was renamed by exec, pid 2's counter went back, pid 3 is a new git reusing the pid of one that exited
         let cur = vec![ProcRaw { pid: 1, comm: "claude".into(), jiffies: 140, rss: 0, container: None, start: 10 }, ProcRaw { pid: 2, comm: "node".into(), jiffies: 10, rss: 0, container: None, start: 10 }, ProcRaw { pid: 3, comm: "git".into(), jiffies: 80, rss: 0, container: None, start: 30 }];
-        let a = aggregate(&prev, &cur, 400);
+        let a = aggregate(&prev, Some(25), &cur, 400);
         assert_eq!(a.iter().map(|x| (x.comm.as_str(), x.cpu_pct)).collect::<Vec<_>>(), vec![("git", 20.0), ("claude", 10.0)]);
     }
 
@@ -257,16 +263,39 @@ mod tests {
     fn aggregate_counts_a_process_born_since_the_last_walk_whole() {
         let prev = vec![ProcRaw { pid: 1, comm: "bash".into(), jiffies: 5, rss: 0, container: None, start: 100 }];
         let cur = vec![ProcRaw { pid: 1, comm: "bash".into(), jiffies: 5, rss: 0, container: None, start: 100 }, ProcRaw { pid: 9, comm: "git".into(), jiffies: 40, rss: 0, container: None, start: 200 }];
-        let a = aggregate(&prev, &cur, 400);
+        let a = aggregate(&prev, Some(150), &cur, 400);
         assert_eq!((a.len(), a[0].comm.as_str(), a[0].cpu_pct), (1, "git", 10.0), "all its CPU time fell in this interval");
     }
 
     #[test]
     fn aggregate_never_counts_the_lifetime_of_a_process_the_last_walk_missed() {
-        // the previous walk failed (empty) or skipped a pid that started before the newest process it saw: its jiffies are a lifetime, not this interval
+        // the previous walk failed (empty) or skipped a pid that started before it: its jiffies are a lifetime, not this interval
         let old = ProcRaw { pid: 8, comm: "node".into(), jiffies: 90_000, rss: 0, container: None, start: 50 };
-        assert!(aggregate(&[], std::slice::from_ref(&old), 400).is_empty());
+        assert!(aggregate(&[], Some(150), std::slice::from_ref(&old), 400).is_empty());
         let prev = vec![ProcRaw { pid: 1, comm: "bash".into(), jiffies: 5, rss: 0, container: None, start: 100 }];
-        assert!(aggregate(&prev, &[old], 400).is_empty());
+        assert!(aggregate(&prev, Some(150), std::slice::from_ref(&old), 400).is_empty());
+        // the previous walk's time unknown: any unseen pid, however late it started
+        let late = ProcRaw { start: 500, ..old };
+        assert!(aggregate(&prev, None, &[late], 400).is_empty());
+    }
+
+    #[test]
+    fn aggregate_judges_an_unseen_pid_by_the_last_walks_time_not_by_the_newest_start_it_saw() {
+        // a quiet host: the newest process the previous walk saw started at 1 s, the walk itself ran at 1 h; pid 8 started in between but was skipped (swapped out)
+        let prev = vec![ProcRaw { pid: 1, comm: "bash".into(), jiffies: 5, rss: 0, container: None, start: 100 }];
+        let skipped = ProcRaw { pid: 8, comm: "node".into(), jiffies: 90_000, rss: 0, container: None, start: 200_000 };
+        assert!(aggregate(&prev, Some(360_000), &[skipped], 400).is_empty(), "a lifetime, not this interval");
+        let born = ProcRaw { pid: 9, comm: "git".into(), jiffies: 40, rss: 0, container: None, start: 360_050 };
+        let a = aggregate(&prev, Some(360_000), &[born], 400);
+        assert_eq!((a.len(), a[0].comm.as_str(), a[0].cpu_pct), (1, "git", 10.0), "born since the previous walk: all its CPU time counts");
+    }
+
+    #[test]
+    fn uptime_reads_jiffies_since_boot() {
+        let dir = tempdir("uptime");
+        assert_eq!(uptime_jiffies(&dir), None);
+        fs::write(dir.join("uptime"), "3600.07 7000.00\n").unwrap();
+        assert_eq!(uptime_jiffies(&dir), Some(360_007));
+        fs::remove_dir_all(dir).unwrap();
     }
 }
