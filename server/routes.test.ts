@@ -80,14 +80,6 @@ test('telegram deploy with a malformed token answers 400 before calling Telegram
   expect(((await res.json()) as { error: string }).error).toBe('token must be the one @BotFather gave, like 123456789:AAH…')
 })
 
-test('telegram deploy with a typed Docker group id that is not a whole number answers 400 before calling Telegram when the socket group cannot be read', async () => {
-  for (const dockerGid of ['abc', -1, 1.5, false, [], ' ']) {
-    const res = await fetch(`${base}/api/telegram/deploy`, { method: 'POST', headers: { cookie: session, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: JSON.stringify({ token: '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw', dockerGid }) })
-    expect(res.status).toBe(400)
-    expect(((await res.json()) as { error: string }).error).toBe('Docker group id must be a whole number')
-  }
-})
-
 test('a cookie signed with another secret, an unknown id, an idle record or the old three-part format is refused', async () => {
   const { touch } = await import('./sessions')
   const id = session.slice('session='.length).split('.')[0]
@@ -763,10 +755,10 @@ test('a dev container deploy and a Telegram deploy pass CPUSET from the host cor
     const dev = await post('/api/deploy', { repo: 'a/b', project: 'cpu', gitUserName: 'A', gitUserEmail: 'a@b.c', ghLogin: true })
     expect(dev.status).toBe(201)
     expect(created['dockbench-cpu']).toContainEqual({ name: 'CPUSET', value: '1-3' })
-    const tg = await post('/api/telegram/deploy', { token: '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw', dockerGid: '999' })
+    const tg = await post('/api/telegram/deploy', { token: '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw' })
     expect(tg.status).toBe(201)
     expect(created['dockbench-telegram']).toContainEqual({ name: 'CPUSET', value: '1-3' })
-    expect(created['dockbench-telegram']).toContainEqual({ name: 'DOCKER_GID', value: '999' })
+    expect(created['dockbench-telegram']?.map((e) => e.name)).not.toContain('DOCKER_GID')
   } finally {
     dockerFake = null
     portainerFake = null
@@ -862,7 +854,7 @@ test('a second deploy of the same project while the first runs answers 409 at on
 test('a second Telegram deploy while the first runs answers 409 at once', async () => {
   externalFake = async () => (await Bun.sleep(300), Response.json({ ok: true, result: { username: 'mybot' } }))
   dockerFake = () => new Response('down', { status: 500 })
-  const post = () => fetch(`${base}/api/telegram/deploy`, { method: 'POST', headers: { cookie: session, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: JSON.stringify({ token: '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw', dockerGid: '999' }) })
+  const post = () => fetch(`${base}/api/telegram/deploy`, { method: 'POST', headers: { cookie: session, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: JSON.stringify({ token: '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw' }) })
   try {
     const first = post()
     await Bun.sleep(50)
@@ -889,7 +881,7 @@ test('a Telegram stack create whose answer was lost but that Portainer created a
   }
   externalFake = () => Response.json({ ok: true, result: { username: 'mybot' } })
   try {
-    const res = await fetch(`${base}/api/telegram/deploy`, { method: 'POST', headers: { cookie: session, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: JSON.stringify({ token: '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw', dockerGid: '999' }) })
+    const res = await fetch(`${base}/api/telegram/deploy`, { method: 'POST', headers: { cookie: session, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: JSON.stringify({ token: '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw' }) })
     expect(res.status).toBe(201)
     expect(((await res.json()) as { warning?: string }).warning).toContain("Portainer created the stack, but its answer was lost")
   } finally {

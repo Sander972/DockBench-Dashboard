@@ -16,7 +16,7 @@ import { afterFailedCreate, deploy, DeployFailure, REPO_RE, validateDeploy } fro
 import { deleteKeys, keyTitle, removeStack, stackKeys } from './remove'
 import { generateDeployKey } from './sshkey'
 import { deviceCode, fetchStatus, imageChecker, inspectCache, lastError, shared, statusTracker, ttlCache, updateAvailable } from './containers'
-import { botName, dockerGid, fetchBotStatus, getMe, parseGid, setupCode, telegramEnv, TELEGRAM_IMAGE, TELEGRAM_NAME, validToken, type BotStatus } from './telegram'
+import { botName, fetchBotStatus, getMe, setupCode, telegramEnv, TELEGRAM_IMAGE, TELEGRAM_NAME, validToken, type BotStatus } from './telegram'
 import { BOOT_ID, COLLECTOR_NAME, DASHBOARD_NAME, imageRow } from './system'
 import { runsCache, summarize } from './actions'
 import { CONFIG_DIFF_MAX, configDiffCmd, configPullCmd, lastLine, loginCodeCmd, loginStartCmd, loginUrl, logoutCmd, parseConfigDiff } from './claude'
@@ -1043,17 +1043,14 @@ export const routes = {
     return json({ deployed: true, state: c.state, startedAt: x.startedAt, image: x.image, imageUpdate: updateAvailable(x.image, check?.imageId ?? null, x.imageId), status, statusError, now: new Date().toISOString() })
   }),
 
-  // body { token, dockerGid? }: getMe checks the token, then the same checks and Portainer stack as a dev container deploy. The token goes only to Telegram and into the stack env.
+  // body { token }: getMe checks the token, then the same checks and Portainer stack as a dev container deploy. The token goes only to Telegram and into the stack env.
   '/api/telegram/deploy': {
     POST: auth(async (req: BunRequest<'/api/telegram/deploy'>, server) => {
       server.timeout(req, 0)
       await requireStepUp(req, 'deploy')
-      const body = (await req.json().catch(() => null)) as { token?: unknown; dockerGid?: unknown } | null
+      const body = (await req.json().catch(() => null)) as { token?: unknown } | null
       if (!validToken(body?.token)) return json({ error: 'token must be the one @BotFather gave, like 123456789:AAH…' }, 400)
       const token = body.token.trim()
-      // the typed id is only read, and checked, when the socket's group cannot be read here
-      const gid = (await dockerGid(env.dockerHost)) ?? parseGid(body.dockerGid)
-      if (gid === 'invalid') return json({ error: 'Docker group id must be a whole number' }, 400)
       // a double submit would pass the 409 checks twice, and the second create's lookup would find the first one's stack
       if (deploying.has(TELEGRAM_NAME)) return json({ error: `A deploy of ${TELEGRAM_NAME} is already running` }, 409)
       deploying.add(TELEGRAM_NAME)
@@ -1061,14 +1058,13 @@ export const routes = {
       const started = Date.now()
       try {
         const bot = await step('GET', '/getMe', 200, () => getMe(token))
-        if (gid === null) throw new HttpError(400, 'The Docker socket group id could not be read here. Enter it under Docker group id: run stat -c %g /var/run/docker.sock on the VPS.')
         if (await step('GET', '/containers/json', 200, () => containerByName(env.dockerHost, TELEGRAM_NAME))) throw new HttpError(409, `Container ${TELEGRAM_NAME} already exists`)
         if (await step('GET', '/api/stacks', 200, () => findStack(portainer, TELEGRAM_NAME))) throw new HttpError(409, `Stack ${TELEGRAM_NAME} already exists. Remove it in Portainer to deploy again.`)
         await step('POST', '/images/create', 200, () => pullImage(portainer, TELEGRAM_IMAGE))
         const cpuset = cpusetFor((await info().catch(() => null))?.ncpu ?? 0)
         let warning: string | undefined
         try {
-          await step('POST', '/api/stacks/create/standalone/string', 200, () => createStack(portainer, TELEGRAM_NAME, telegramEnv(token, gid, cpuset), TELEGRAM_STACK_FILE))
+          await step('POST', '/api/stacks/create/standalone/string', 200, () => createStack(portainer, TELEGRAM_NAME, telegramEnv(token, cpuset), TELEGRAM_STACK_FILE))
         } catch (e) {
           warning = await afterFailedCreate(e, calls, () => findStack(portainer, TELEGRAM_NAME))
         }

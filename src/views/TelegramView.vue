@@ -42,10 +42,6 @@ onBeforeUnmount(() => { clearInterval(timer); document.removeEventListener('visi
         <label for="tgToken">Bot token</label>
         <input id="tgToken" v-model="store.tg.token" class="inp num" type="password" autocomplete="off" spellcheck="false" placeholder="123456789:AAH…">
       </div>
-      <details>
-        <summary>Docker group id</summary>
-        <div class="field"><label for="tgGid">Docker group id</label><input id="tgGid" v-model="store.tg.gid" class="inp num" inputmode="numeric" autocomplete="off"><p class="fine">Only needed when the dashboard cannot read it itself. On the VPS: <code>stat -c %g /var/run/docker.sock</code></p></div>
-      </details>
       <StepUpPanel v-if="cf" :action="cf.action" name="dockbench-telegram" :text="COPY[cf.target]" :waiting="cf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
       <button v-else type="button" class="btn pri full" :disabled="!store.tg.token.trim() || !!store.tg.busy" @click="telegramAction('deploy')">{{ store.tg.busy === 'deploy' ? 'Deploying…' : 'Deploy dockbench-telegram' }}</button>
     </section>

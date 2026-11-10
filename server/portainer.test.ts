@@ -83,11 +83,17 @@ test('cpusetFor leaves core 0 to the host and gives up below 2 cores', () => {
 })
 
 test('Telegram stack file reads every variable telegramEnv sets and keeps the bot contract', () => {
-  for (const { name } of telegramEnv('1:x', 1, '1-3')) expect(TELEGRAM_STACK_FILE).toContain(`\${${name}`)
+  for (const { name } of telegramEnv('1:x', '1-3')) expect(TELEGRAM_STACK_FILE).toContain(`\${${name}`)
   expect(TELEGRAM_STACK_FILE).toContain('cpuset: ${CPUSET:-}')
   expect(TELEGRAM_STACK_FILE).toContain('image: ghcr.io/sander972/dockbench-telegram:latest')
   expect(TELEGRAM_STACK_FILE).toContain('container_name: dockbench-telegram')
-  expect(TELEGRAM_STACK_FILE).toContain('/var/run/docker.sock:/var/run/docker.sock')
+  // Docker only through a GET-only socket proxy that only the bot can reach: the bot has no socket and no socket group
+  expect(TELEGRAM_STACK_FILE).toContain('DOCKER_HOST: tcp://docker-proxy:2375')
+  expect(TELEGRAM_STACK_FILE).toContain('POST: 0')
+  expect(TELEGRAM_STACK_FILE).toContain('/var/run/docker.sock:/var/run/docker.sock:ro')
+  expect(TELEGRAM_STACK_FILE).not.toContain('group_add')
+  expect(TELEGRAM_STACK_FILE).not.toContain('DOCKER_GID')
+  expect(TELEGRAM_STACK_FILE).toContain('internal: true')
   expect(TELEGRAM_STACK_FILE).toContain('- state:/data')
   expect(TELEGRAM_STACK_FILE).toContain('- devnet')
   // not a dev container: the label would list it on Bench and make the bot open a topic for itself

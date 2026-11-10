@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { botName, dockerGid, getMe, parseGid, setupCode, telegramEnv, validToken } from './telegram'
+import { botName, getMe, setupCode, telegramEnv, validToken } from './telegram'
 
 const TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw'
 
@@ -21,8 +21,8 @@ test('setupCode takes the newest code when several boots printed one', () => {
   expect(setupCode([])).toBeNull()
 })
 
-test('telegramEnv sets the token, the socket group and the cpuset', () => {
-  expect(telegramEnv(TOKEN, 999, '1-3')).toEqual([{ name: 'TELEGRAM_BOT_TOKEN', value: TOKEN }, { name: 'DOCKER_GID', value: '999' }, { name: 'CPUSET', value: '1-3' }])
+test('telegramEnv sets the token and the cpuset', () => {
+  expect(telegramEnv(TOKEN, '1-3')).toEqual([{ name: 'TELEGRAM_BOT_TOKEN', value: TOKEN }, { name: 'CPUSET', value: '1-3' }])
 })
 
 test('getMe answers the username and never leaks the token in an error', async () => {
@@ -38,11 +38,6 @@ test('getMe answers the username and never leaks the token in an error', async (
   expect(e2.message).not.toContain(TOKEN)
 })
 
-test('dockerGid is null for a tcp host or a missing socket', async () => {
-  expect(await dockerGid('tcp://proxy:2375')).toBeNull()
-  expect(await dockerGid('/nonexistent/docker.sock')).toBeNull()
-})
-
 test('botName asks Telegram with the container own token, once per container, never trusting /status', async () => {
   const docker = Bun.serve({ port: 0, fetch: () => Response.json({ Config: { Env: ['PATH=/usr/bin', `TELEGRAM_BOT_TOKEN=${TOKEN}`] } }) })
   const asked: string[] = []
@@ -54,11 +49,3 @@ test('botName asks Telegram with the container own token, once per container, ne
   docker.stop()
 })
 
-test('parseGid takes a whole number or a digit string up to 2^32 - 2, reads blank as not given and anything else as invalid', () => {
-  expect(parseGid(999)).toBe(999)
-  expect(parseGid('999')).toBe(999)
-  expect(parseGid(0)).toBe(0)
-  expect(parseGid(2 ** 32 - 2)).toBe(2 ** 32 - 2)
-  for (const v of [undefined, null, '']) expect(parseGid(v)).toBeNull()
-  for (const v of ['abc', ' ', '1e3', '-1', -1, 1.5, false, true, [], {}, 2 ** 32 - 1, '4294967295', '99999999999']) expect(parseGid(v)).toBe('invalid')
-})

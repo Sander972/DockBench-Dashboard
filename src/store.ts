@@ -22,7 +22,7 @@ export interface Draft extends DeployDraft { run: DeployRun | null }
 
 export type TgOp = 'deploy' | 'claim' | 'update'
 // loadError: GET /api/telegram is failing (the page says so instead of judging the last answer), cleared by the next answer; askedAt: browser time the oldest unanswered GET /api/telegram was sent, 0 while none is pending
-const newTg = () => ({ token: '', gid: '', busy: null as TgOp | null, calls: [] as ApiCall[], error: '', claim: null as TelegramClaim | null, loadError: '', askedAt: 0 })
+const newTg = () => ({ token: '', busy: null as TgOp | null, calls: [] as ApiCall[], error: '', claim: null as TelegramClaim | null, loadError: '', askedAt: 0 })
 
 // the Updates panel in Settings: the running action, its trace, and the wait for the dashboard to come back after updating itself
 export type SysOp = 'check' | 'dashboard' | 'telegram'
@@ -873,8 +873,7 @@ async function runTelegram(op: TgOp) {
   g.calls = []
   try {
     if (op === 'deploy') {
-      const gid = g.gid.trim() || undefined
-      const r = await api.deployTelegram(g.token.trim(), gid)
+      const r = await api.deployTelegram(g.token.trim())
       g.token = ''
       g.calls = r.calls
       toast(r.warning ? `Deployed @${r.bot}, but: ${r.warning}` : `Deployed @${r.bot}. Waiting for /status`, r.warning ? 15_000 : undefined)

@@ -1,5 +1,4 @@
-// The Telegram bot (the DockBench-telegram repo) as a dashboard plugin: token check, socket group, setup code from its log, its /status. Kept free of env so tests drive it with fakes.
-import { stat } from 'node:fs/promises'
+// The Telegram bot (the DockBench-telegram repo) as a dashboard plugin: token check, setup code from its log, its /status. Kept free of env so tests drive it with fakes.
 import { dockerFetch } from './docker'
 import { HttpError } from './http'
 
@@ -36,19 +35,6 @@ export function botName(host: string, id: string, fetcher: typeof fetch = fetch)
   return p
 }
 
-// group id of the Docker socket the dashboard mounts, which is the host's (DOCKER_GID in the bot stack). null over tcp or when the socket is not there.
-export async function dockerGid(host: string): Promise<number | null> {
-  if (/^(tcp|http):/.test(host)) return null
-  return stat(host).then((s) => s.gid, () => null)
-}
-
-// the Docker group id typed on the Telegram page: null when not given, 'invalid' for anything but a whole number or a digit string up to the largest Linux group id, 2^32 - 2 (Number('') and Number(false) are 0, which would mean root's group)
-export function parseGid(v: unknown): number | null | 'invalid' {
-  if (v === undefined || v === null || v === '') return null
-  const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : NaN
-  return Number.isInteger(n) && n >= 0 && n <= 2 ** 32 - 2 ? n : 'invalid'
-}
-
 // every boot without an owner logs a new code, so the last one is the live one
 export function setupCode(lines: string[]): string | null {
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -58,8 +44,9 @@ export function setupCode(lines: string[]): string | null {
   return null
 }
 
-export function telegramEnv(token: string, gid: number, cpuset: string): { name: string; value: string }[] {
-  return [{ name: 'TELEGRAM_BOT_TOKEN', value: token }, { name: 'DOCKER_GID', value: String(gid) }, { name: 'CPUSET', value: cpuset }]
+// the bot stack reaches Docker through its own GET-only socket proxy, so it needs no socket group
+export function telegramEnv(token: string, cpuset: string): { name: string; value: string }[] {
+  return [{ name: 'TELEGRAM_BOT_TOKEN', value: token }, { name: 'CPUSET', value: cpuset }]
 }
 
 // GET /status of the bot
