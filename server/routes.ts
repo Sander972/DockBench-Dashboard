@@ -20,7 +20,6 @@ import { botName, fetchBotStatus, getMe, setupCode, telegramEnv, TELEGRAM_IMAGE,
 import { BOOT_ID, COLLECTOR_NAME, DASHBOARD_NAME, imageRow } from './system'
 import { runsCache, summarize } from './actions'
 import { CONFIG_DIFF_MAX, configDiffCmd, configPullCmd, lastLine, loginCodeCmd, loginStartCmd, loginUrl, logoutCmd, parseConfigDiff } from './claude'
-import { newChallenge, readPasskeys, takeChallenge, userHandle, verifyAssertion, verifyRegistration, writePasskeys, type Guarded, type StoredPasskey } from './passkey'
 
 const secure = env.publicUrl.startsWith('https://')
 const cookieOpts = { httpOnly: true, sameSite: 'lax' as const, secure, path: '/' }
@@ -68,7 +67,7 @@ async function requireAccount(): Promise<Account> {
 
 const errMsg = (e: unknown) => (e as Error).message
 
-// 'ok', or why the code is refused. Shared by the 2FA sign-in step and adding the first passkey, so one lockout and one replay guard cover both.
+// 'ok', or why the code is refused, with one lockout and one replay guard for the 2FA sign-in step.
 function checkTotp(code: unknown): 'ok' | 'wrong' | 'locked' {
   if (Date.now() < totpLockedUntil) return 'locked'
   const step = verifyTotp(env.totpKey, code)
@@ -84,49 +83,12 @@ function checkTotp(code: unknown): 'ok' | 'wrong' | 'locked' {
   return 'ok'
 }
 
-// A passkey check opens a 5-minute window for the guarded actions, held in its own signed cookie keyed by the session id, so a session cookie never passes for it and it dies with its device's session.
-const stepUpSecret = (id: string) => `${env.sessionSecret}:step-up:${id}`
-const STEP_UP_TTL_SECONDS = 300
-const rp = { rpId: new URL(env.publicUrl).hostname, origin: appOrigin }
-
-async function stepUpUntil(req: BunRequest<string>): Promise<number> {
-  const id = sessionId(req)
-  const c = req.cookies.get('step_up')
-  return id && verifySession(stepUpSecret(id), c) ? Number(c!.split('.')[1]) : 0
-}
-
-function grantStepUp(req: BunRequest<string>, now: number, id: string): number {
-  req.cookies.set('step_up', createSession(stepUpSecret(id), now, STEP_UP_TTL_SECONDS), { ...cookieOpts, maxAge: STEP_UP_TTL_SECONDS })
-  return now + STEP_UP_TTL_SECONDS * 1000
-}
-
 // a new device record and its cookie; other devices stay signed in, the least recently seen one goes when the cap is reached
 async function signIn(req: BunRequest<string>, server: Server<undefined>): Promise<string> {
   const r = await createSessionRecord(env.dataDir, who(req, server), await limits())
   req.cookies.set('session', signCookie(env.sessionSecret, r.id), { ...cookieOpts, maxAge: SESSION_TTL_SECONDS })
   return r.id
 }
-
-// only enforced once a passkey exists, since without one there is nothing to check with
-async function requireStepUp(req: BunRequest<string>, action: Guarded) {
-  const p = await readPasskeys(env.dataDir)
-  if (p.creds.length && p.stepUp[action] && !(await stepUpUntil(req))) throw new HttpError(403, 'step_up_required')
-}
-
-// verifies a navigator.credentials.get() answer against the stored passkeys and saves the new counter
-async function checkPasskey(body: unknown, purpose: 'login' | 'step-up'): Promise<StoredPasskey> {
-  const cred = (body ?? {}) as { id?: unknown; response?: { clientDataJSON?: unknown } }
-  const challenge = takeChallenge(cred.response?.clientDataJSON, purpose)
-  const file = await readPasskeys(env.dataDir)
-  const stored = file.creds.find((c) => c.id === cred.id)
-  if (!stored) throw new Error('this passkey is not registered here')
-  stored.signCount = verifyAssertion(cred, stored, { challenge, ...rp })
-  stored.lastUsedAt = new Date().toISOString()
-  await writePasskeys(env.dataDir, file)
-  return stored
-}
-
-const assertionOptions = (purpose: 'login' | 'step-up', creds: StoredPasskey[]) => ({ challenge: newChallenge(purpose), rpId: rp.rpId, timeout: 60_000, userVerification: 'required', allowCredentials: creds.map((c) => ({ type: 'public-key', id: c.id })) })
 
 // every container route takes ids from the URL, so it only ever acts on a container that carries the dockbench label
 async function dockbench(id: string) {
@@ -259,7 +221,6 @@ const VERB = { start: 'Start', stop: 'Stop', restart: 'Restart' } as const
 function containerAction(a: 'start' | 'stop' | 'restart') {
   return auth(async (req: BunRequest<'/api/containers/:id/start'>, server) => {
     server.timeout(req, 0)
-    if (a !== 'start') await requireStepUp(req, a)
     const id = req.params.id
     const c = await dockbench(id)
     return withPending(id, c.name, a, async () => {
@@ -399,52 +360,6 @@ export const routes = {
     },
   },
 
-  // Passkey sign-in, in place of GitHub plus the 2FA code. Not behind auth, like /api/auth/totp. Only discoverable passkeys, so the options name no credential ids to an unauthenticated caller.
-  '/api/auth/passkey/options': {
-    POST: async (req: BunRequest<'/api/auth/passkey/options'>) => {
-      if (crossSite(req)) return json({ error: 'cross-site request' }, 403)
-      if (!(await readPasskeys(env.dataDir)).creds.length) return json({ error: 'No passkey is registered yet. Sign in with GitHub, then add one in Settings.' }, 400)
-      return json(assertionOptions('login', []))
-    },
-  },
-
-  '/api/auth/passkey/verify': {
-    POST: async (req: BunRequest<'/api/auth/passkey/verify'>, server: Server<undefined>) => {
-      if (crossSite(req)) return json({ error: 'cross-site request' }, 403)
-      await requireAccount()
-      try {
-        await checkPasskey(await req.json().catch(() => null), 'login')
-      } catch (e) {
-        await log(req, server, 'Sign-in failed', 'passkey', { ok: false, note: errMsg(e) })
-        return json({ error: errMsg(e) }, 400)
-      }
-      const id = await signIn(req, server)
-      // the sign-in itself was a passkey check, so the guarded actions do not ask again right away
-      grantStepUp(req, Date.now(), id)
-      await log(req, server, 'Signed in', env.githubLogin, { note: 'passkey' })
-      return json({})
-    },
-  },
-
-  '/api/auth/step-up/options': {
-    POST: auth(async () => {
-      const { creds } = await readPasskeys(env.dataDir)
-      if (!creds.length) return json({ error: 'No passkey is registered. Add one in Settings.' }, 400)
-      return json(assertionOptions('step-up', creds))
-    }),
-  },
-
-  '/api/auth/step-up/verify': {
-    POST: auth(async (req: BunRequest<'/api/auth/step-up/verify'>) => {
-      try {
-        await checkPasskey(await req.json().catch(() => null), 'step-up')
-      } catch (e) {
-        return json({ error: errMsg(e) }, 400)
-      }
-      return json({ stepUpUntil: grantStepUp(req, Date.now(), sessionId(req)!) })
-    }),
-  },
-
   // body { all: true } signs every device out ("Sign out everywhere" in Settings); the default signs this device out only
   '/api/auth/logout': {
     POST: auth(async (req: BunRequest<'/api/auth/logout'>, server) => {
@@ -452,94 +367,17 @@ export const routes = {
       if (body.all === true) await revokeAll(env.dataDir)
       else await revoke(env.dataDir, sessionId(req)!)
       req.cookies.delete('session')
-      req.cookies.delete('step_up')
       await log(req, server, body.all === true ? 'Signed out everywhere' : 'Signed out', env.githubLogin)
       return json({})
     }),
   },
 
   // Session in src/types.ts
-  '/api/session': auth(async (req: BunRequest<'/api/session'>) => {
+  '/api/session': auth(async () => {
     const a = await requireAccount()
-    const p = await readPasskeys(env.dataDir)
     const { claudeConfigRepo, vscodeSettings, maxDevices, idleDays } = await readSettings(env.dataDir)
-    return json({ user: env.githubLogin, email: noreplyEmail(a), stepUpUntil: (await stepUpUntil(req)) || null, passkeys: p.creds.length, stepUp: p.stepUp, claudeConfigRepo, vscodeSettings, maxDevices, idleDays })
+    return json({ user: env.githubLogin, email: noreplyEmail(a), claudeConfigRepo, vscodeSettings, maxDevices, idleDays })
   }),
-
-  // PasskeyInfo[] in src/types.ts; the public keys stay on the server
-  '/api/passkeys': {
-    GET: auth(async () => json((await readPasskeys(env.dataDir)).creds.map(({ id, name, createdAt, lastUsedAt }) => ({ id, name, createdAt, lastUsedAt })))),
-    // body { name, credential }: the navigator.credentials.create() answer to the options below
-    POST: auth(async (req: BunRequest<'/api/passkeys'>, server) => {
-      const body = (await req.json().catch(() => null)) as { name?: unknown; credential?: { response?: { clientDataJSON?: unknown; attestationObject?: unknown } } } | null
-      let reg: ReturnType<typeof verifyRegistration>
-      try {
-        const challenge = takeChallenge(body?.credential?.response?.clientDataJSON, 'register')
-        reg = verifyRegistration(body!.credential!, { challenge, ...rp })
-      } catch (e) {
-        return json({ error: errMsg(e) }, 400)
-      }
-      const file = await readPasskeys(env.dataDir)
-      if (file.creds.some((c) => c.id === reg.id)) return json({ error: 'This passkey is already registered.' }, 409)
-      const name = typeof body?.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 40) : 'Passkey'
-      file.creds.push({ ...reg, name, createdAt: new Date().toISOString(), lastUsedAt: null })
-      await writePasskeys(env.dataDir, file)
-      await log(req, server, 'Passkey added', name)
-      return json({}, 201)
-    }),
-  },
-
-  // A passkey outlives sessions and logouts, so adding one takes more than the session cookie: a passkey check when one already exists, otherwise the current authenticator code (body { code }).
-  '/api/passkeys/options': {
-    POST: auth(async (req: BunRequest<'/api/passkeys/options'>) => {
-      const { creds } = await readPasskeys(env.dataDir)
-      if (creds.length) {
-        if (!(await stepUpUntil(req))) throw new HttpError(403, 'step_up_required')
-      } else {
-        const r = checkTotp(((await req.json().catch(() => null)) as { code?: unknown } | null)?.code)
-        if (r === 'locked') return json({ error: 'Too many wrong codes. Wait 15 minutes, then try again.' }, 429)
-        if (r === 'wrong') return json({ error: 'That code is wrong or was already used. Enter the current one from your authenticator app.' }, 400)
-      }
-      return json({
-        challenge: newChallenge('register'),
-        rp: { id: rp.rpId, name: 'DockBench' },
-        user: { id: userHandle(env.githubLogin), name: env.githubLogin, displayName: env.githubLogin },
-        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-        timeout: 60_000,
-        attestation: 'none',
-        authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' },
-        excludeCredentials: creds.map((c) => ({ type: 'public-key', id: c.id })),
-      })
-    }),
-  },
-
-  '/api/passkeys/:id': {
-    DELETE: auth(async (req: BunRequest<'/api/passkeys/:id'>, server) => {
-      if (!(await stepUpUntil(req))) throw new HttpError(403, 'step_up_required')
-      const file = await readPasskeys(env.dataDir)
-      const gone = file.creds.find((c) => c.id === req.params.id)
-      if (!gone) return json({ error: 'no passkey with that id' }, 404)
-      file.creds = file.creds.filter((c) => c !== gone)
-      await writePasskeys(env.dataDir, file)
-      await log(req, server, 'Passkey removed', gone.name)
-      return json({})
-    }),
-  },
-
-  // StepUpPrefs in src/types.ts: which actions ask for a passkey. Turning a guard off needs a passkey check itself, or a stolen session could switch them all off.
-  '/api/settings/step-up': {
-    POST: auth(async (req: BunRequest<'/api/settings/step-up'>) => {
-      const body = ((await req.json().catch(() => null)) ?? {}) as Record<string, unknown>
-      const file = await readPasskeys(env.dataDir)
-      const next = { ...file.stepUp }
-      for (const k of Object.keys(next) as Guarded[]) if (typeof body[k] === 'boolean') next[k] = body[k] as boolean
-      const loosens = (Object.keys(next) as Guarded[]).some((k) => file.stepUp[k] && !next[k])
-      if (loosens && file.creds.length && !(await stepUpUntil(req))) throw new HttpError(403, 'step_up_required')
-      file.stepUp = next
-      await writePasskeys(env.dataDir, file)
-      return json(next)
-    }),
-  },
 
   // body { claudeConfigRepo }: owner/name, or '' to stop injecting. Only new deploys read it; running containers keep the repo their stack was made with.
   '/api/settings/claude': {
@@ -589,7 +427,7 @@ export const routes = {
     return json((await listSessions(env.dataDir, await limits())).map((r) => ({ ...r, current: r.id === me })))
   }),
 
-  // signs one device out; the caller may sign itself out here too (its next request answers 401). No step-up: it only tightens access.
+  // signs one device out; the caller may sign itself out here too (its next request answers 401).
   '/api/sessions/:id': {
     DELETE: auth(async (req: BunRequest<'/api/sessions/:id'>, server) => {
       const gone = (await listSessions(env.dataDir, await limits())).find((r) => r.id === req.params.id)
@@ -636,18 +474,16 @@ export const routes = {
   '/api/containers/:id/update': {
     POST: auth(async (req: BunRequest<'/api/containers/:id/update'>, server) => {
       server.timeout(req, 0)
-      await requireStepUp(req, 'update')
       const id = req.params.id
       const c = await dockbench(id)
       return withPending(id, c.name, 'update', () => updateViaStack(req, server, c))
     }),
   },
 
-  // RemoveResult in src/types.ts: deletes the container's Portainer stack, then the container if compose left it, the stack's volumes (/home/dev, the workspace with any unpushed work) and its deploy keys on GitHub. Cannot be undone, so it has its own `remove` step-up. Once the stack is gone a later failure only warns, in the answer and the log note.
+  // RemoveResult in src/types.ts: deletes the container's Portainer stack, then the container if compose left it, the stack's volumes (/home/dev, the workspace with any unpushed work) and its deploy keys on GitHub. Cannot be undone. Once the stack is gone a later failure only warns, in the answer and the log note.
   '/api/containers/:id/remove': {
     POST: auth(async (req: BunRequest<'/api/containers/:id/remove'>, server) => {
       server.timeout(req, 0)
-      await requireStepUp(req, 'remove')
       const id = req.params.id
       const c = await dockbench(id)
       const a = await requireAccount()
@@ -683,7 +519,6 @@ export const routes = {
   '/api/containers/:id/config': {
     POST: auth(async (req: BunRequest<'/api/containers/:id/config'>, server) => {
       server.timeout(req, 0)
-      await requireStepUp(req, 'update')
       const b = ((await req.json().catch(() => null)) ?? {}) as Record<string, unknown>
       if (![b.installClaude, b.injectClaudeConfig, b.vscodeConfig].every((x) => typeof x === 'boolean')) return json({ error: 'installClaude, injectClaudeConfig and vscodeConfig must be booleans' }, 400)
       const id = req.params.id
@@ -758,7 +593,7 @@ export const routes = {
     }),
   },
 
-  // { settings }: the container's VS Code Machine settings text, null when it has none. POST overwrites them with the global ones from Settings, no recreate needed, guarded by the `update` step-up.
+  // { settings }: the container's VS Code Machine settings text, null when it has none. POST overwrites them with the global ones from Settings, no recreate needed.
   '/api/containers/:id/vscode': {
     GET: auth(async (req: BunRequest<'/api/containers/:id/vscode'>) => {
       const c = await dockbench(req.params.id)
@@ -779,7 +614,6 @@ export const routes = {
       return json({ settings: r.output })
     }),
     POST: auth(async (req: BunRequest<'/api/containers/:id/vscode'>, server) => {
-      await requireStepUp(req, 'update')
       const id = req.params.id
       const c = await dockbench(id)
       if (c.state !== 'running') return json({ error: `${c.name} is not running` }, 409)
@@ -823,7 +657,6 @@ export const routes = {
     }),
     POST: auth(async (req: BunRequest<'/api/containers/:id/claude-config'>, server) => {
       server.timeout(req, 0)
-      await requireStepUp(req, 'update')
       const id = req.params.id
       const c = await dockbench(id)
       if (c.state !== 'running') return json({ error: `${c.name} is not running` }, 409)
@@ -847,7 +680,7 @@ export const routes = {
     }),
   },
 
-  // Claude Code sign-in from the Bench page: { url } to open, then the code claude.com gives back. No step-up: it only adds the user's own credentials. The log never holds the link or the code.
+  // Claude Code sign-in from the Bench page: { url } to open, then the code claude.com gives back. The log never holds the link or the code.
   '/api/containers/:id/claude-login': {
     POST: auth(async (req: BunRequest<'/api/containers/:id/claude-login'>, server) => {
       server.timeout(req, 0)
@@ -871,7 +704,7 @@ export const routes = {
     }),
   },
 
-  // { ok: true } once claude signed out and its credentials file is gone, so the next /status shows the sign-in callout again (switching accounts). No step-up: it only drops the user's own credentials.
+  // { ok: true } once claude signed out and its credentials file is gone, so the next /status shows the sign-in callout again (switching accounts).
   '/api/containers/:id/claude-logout': {
     POST: auth(async (req: BunRequest<'/api/containers/:id/claude-logout'>, server) => {
       server.timeout(req, 0)
@@ -936,7 +769,6 @@ export const routes = {
       server.timeout(req, 0)
       const { id, kind } = req.params
       if (kind !== 'fetch' && kind !== 'pull') return json({ error: 'unknown git action' }, 404)
-      if (kind === 'pull') await requireStepUp(req, 'pull')
       const c = await dockbench(id)
       if (c.state !== 'running') return json({ error: `${c.name} is not running` }, 409)
       const cmd = kind === 'fetch' ? ['git', 'fetch'] : ['git', 'pull', '--ff-only']
@@ -979,7 +811,6 @@ export const routes = {
     POST: auth(async (req: BunRequest<'/api/deploy'>, server) => {
       // pull plus the 10 s poll can outlast Bun's idle timeout (10 s, enforced on GET only in Bun 1.4.2, but the image floats on oven/bun:1)
       server.timeout(req, 0)
-      await requireStepUp(req, 'deploy')
       const v = validateDeploy(await req.json().catch(() => null), env.dockbenchImage)
       if (!v.ok) return json({ error: v.error }, 400)
       const { repo, project, gitUserName, gitUserEmail, image, installClaude, injectClaudeConfig, setupRerun, vscodeConfig, ghLogin } = v.value
@@ -1044,7 +875,6 @@ export const routes = {
   '/api/telegram/deploy': {
     POST: auth(async (req: BunRequest<'/api/telegram/deploy'>, server) => {
       server.timeout(req, 0)
-      await requireStepUp(req, 'deploy')
       const body = (await req.json().catch(() => null)) as { token?: unknown } | null
       if (!validToken(body?.token)) return json({ error: 'token must be the one @BotFather gave, like 123456789:AAH…' }, 400)
       const token = body.token.trim()
@@ -1076,10 +906,9 @@ export const routes = {
     }),
   },
 
-  // The one-time setup code from the bot's log, as a t.me link that claims the bot. Whoever claims it gets a shell in every dev container, so it takes the deploy passkey check and is never part of a poll.
+  // The one-time setup code from the bot's log, as a t.me link that claims the bot. Whoever claims it gets a shell in every dev container, so it is never part of a poll.
   '/api/telegram/claim': {
-    POST: auth(async (req: BunRequest<'/api/telegram/claim'>) => {
-      await requireStepUp(req, 'deploy')
+    POST: auth(async () => {
       const c = await containerByName(env.dockerHost, TELEGRAM_NAME)
       if (!c || c.state !== 'running') return json({ error: `${TELEGRAM_NAME} is not running` }, 409)
       const s = await fetchBotStatus(botStatusUrl).catch(() => null)
@@ -1094,7 +923,6 @@ export const routes = {
   '/api/telegram/update': {
     POST: auth(async (req: BunRequest<'/api/telegram/update'>, server) => {
       server.timeout(req, 0)
-      await requireStepUp(req, 'update')
       const c = await containerByName(env.dockerHost, TELEGRAM_NAME)
       if (!c) return json({ error: `${TELEGRAM_NAME} is not deployed` }, 404)
       return withPending(c.id, c.name, 'update', () => updateViaStack(req, server, c))
@@ -1116,7 +944,6 @@ export const routes = {
   '/api/system/dashboard/update': {
     POST: auth(async (req: BunRequest<'/api/system/dashboard/update'>, server) => {
       server.timeout(req, 0)
-      await requireStepUp(req, 'update')
       const c = await containerByName(env.dockerHost, DASHBOARD_NAME)
       if (!c) return json({ error: `This server does not run as container ${DASHBOARD_NAME}, so it cannot update itself. Pull and redeploy its stack in Portainer.` }, 409)
       if (pending.has(c.id)) return json({ error: `${c.name} is busy: ${pending.get(c.id)} in progress` }, 409)

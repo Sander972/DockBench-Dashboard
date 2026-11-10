@@ -19,7 +19,7 @@ function sign(secret: string, payload: string): string {
   return createHmac('sha256', secret).update(payload).digest('hex')
 }
 
-// <issued>.<expiry>.<hmac>, Unix milliseconds: a self-contained signed token for the short-lived totp_pending and step_up cookies. The session cookie itself is a record id (server/sessions.ts).
+// <issued>.<expiry>.<hmac>, Unix milliseconds: a self-contained signed token for the short-lived totp_pending cookie. The session cookie itself is a record id (server/sessions.ts).
 export function createSession(secret: string, now = Date.now(), ttlSeconds = SESSION_TTL_SECONDS): string {
   const payload = `${now}.${now + ttlSeconds * 1000}`
   return `${payload}.${sign(secret, payload)}`

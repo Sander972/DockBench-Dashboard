@@ -1,22 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
-import { cancelStepUp, confirmStepUp, loadTelegram, store, telegramAction } from '../store'
+import { loadTelegram, store, telegramAction } from '../store'
 import { prefs } from '../composables/usePrefs'
 import { useNow } from '../composables/useNow'
 import { botRows, groupLink } from '../lib/telegram'
 import Led from '../components/Led.vue'
-import StepUpPanel from '../components/StepUpPanel.vue'
 
 const now = useNow()
 const t = computed(() => store.telegram)
 const rows = computed(() => (t.value?.deployed ? botRows(t.value, now.value, store.tg.loadError, store.tg.askedAt) : []))
 const bot = computed(() => t.value?.status?.bot ?? '')
-const cf = computed(() => (store.confirm?.target.startsWith('telegram-') ? store.confirm : null))
-const COPY = {
-  'telegram-deploy': 'Creates the Portainer stack dockbench-telegram and starts it: a container that reaches every dev container through the Docker socket.',
-  'telegram-claim': 'Shows the one-time code that makes your Telegram account the owner of the bot, with a shell in every dev container.',
-  'telegram-update': 'Pulls the newest bot image and recreates dockbench-telegram. A Claude session running right now is stopped; the sessions stay and a reply continues them.',
-} as Record<string, string>
 // after an error the call left without a status is the one that failed
 const codeCls = (n: number | null) => (n == null ? (store.tg.error ? 'code-bad' : 'code-wait') : n < 300 ? 'code-ok' : 'code-bad')
 
@@ -26,7 +19,7 @@ const start = () => { clearInterval(timer); timer = setInterval(() => { if (!doc
 const onVisible = () => { if (!document.hidden) loadTelegram() }
 onMounted(() => { loadTelegram(); start(); document.addEventListener('visibilitychange', onVisible) })
 watch(() => prefs.poll, start)
-onBeforeUnmount(() => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); cancelStepUp() })
+onBeforeUnmount(() => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) })
 </script>
 
 <template>
@@ -42,8 +35,7 @@ onBeforeUnmount(() => { clearInterval(timer); document.removeEventListener('visi
         <label for="tgToken">Bot token</label>
         <input id="tgToken" v-model="store.tg.token" class="inp num" type="password" autocomplete="off" spellcheck="false" placeholder="123456789:AAH…">
       </div>
-      <StepUpPanel v-if="cf" :action="cf.action" name="dockbench-telegram" :text="COPY[cf.target]" :waiting="cf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-      <button v-else type="button" class="btn pri full" :disabled="!store.tg.token.trim() || !!store.tg.busy" @click="telegramAction('deploy')">{{ store.tg.busy === 'deploy' ? 'Deploying…' : 'Deploy dockbench-telegram' }}</button>
+      <button type="button" class="btn pri full" :disabled="!store.tg.token.trim() || !!store.tg.busy" @click="telegramAction('deploy')">{{ store.tg.busy === 'deploy' ? 'Deploying…' : 'Deploy dockbench-telegram' }}</button>
     </section>
 
     <section v-else class="plate dsec" aria-labelledby="tgSetup">
@@ -56,7 +48,7 @@ onBeforeUnmount(() => { clearInterval(timer); document.removeEventListener('visi
               <a class="btn pri" :href="store.tg.claim.link" target="_blank" rel="noopener">Open Telegram and press Start</a>
               <span class="fine">or send <code>/setup {{ store.tg.claim.code }}</code> to @{{ bot }}</span>
             </div>
-            <div v-else class="btns"><button type="button" class="btn pri" :disabled="!!store.tg.busy || !!cf" @click="telegramAction('claim')">Claim ownership</button></div>
+            <div v-else class="btns"><button type="button" class="btn pri" :disabled="!!store.tg.busy" @click="telegramAction('claim')">Claim ownership</button></div>
           </template>
           <template v-if="r.key === 'group' && !r.ok && rows[1].ok && bot">
             <p class="fine">Turn Topics on in the group settings first, then add the bot. Telegram asks to make it admin with Manage topics, Pin messages and Delete messages.</p>
@@ -68,8 +60,7 @@ onBeforeUnmount(() => { clearInterval(timer); document.removeEventListener('visi
           </ul>
         </li>
       </ol>
-      <StepUpPanel v-if="cf" :action="cf.action" name="dockbench-telegram" :text="COPY[cf.target]" :waiting="cf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-      <div v-else class="btns">
+      <div class="btns">
         <button type="button" class="btn" :disabled="!!store.tg.busy" @click="telegramAction('update')">{{ store.tg.busy === 'update' ? 'Updating…' : t.imageUpdate ? 'Update to the newest image' : 'Pull and redeploy' }}</button>
       </div>
     </section>

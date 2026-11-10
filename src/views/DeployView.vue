@@ -6,8 +6,8 @@ import DeployForm from '../components/DeployForm.vue'
 import DeployRun from '../components/DeployRun.vue'
 
 loadRepos()
-// the screen swaps between form and run: move focus to the new heading, unless the passkey panel took it
-watch(() => !!store.draft.run, () => nextTick(() => { if (!store.confirm) document.querySelector<HTMLElement>('main h1')?.focus() }))
+// the screen swaps between form and run: move focus to the new heading
+watch(() => !!store.draft.run, () => nextTick(() => document.querySelector<HTMLElement>('main h1')?.focus()))
 </script>
 
 <template>

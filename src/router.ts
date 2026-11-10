@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { cancelStepUp, init, store } from './store'
+import { init, store } from './store'
 import BenchView from './views/BenchView.vue'
 import SignInView from './views/SignInView.vue'
 import { afterPaint } from './lib/paint'
@@ -51,7 +51,6 @@ router.onError((e, to) => {
   if (/dynamically imported module|Importing a module script failed/.test(String(e?.message))) location.assign(to.fullPath)
 })
 
-router.afterEach((to, from) => {
+router.afterEach(to => {
   document.title = `${to.meta.title} · DockBench`
-  if (to.path !== from.path) cancelStepUp()
 })

@@ -10,7 +10,7 @@ watch(() => store.host?.name, n => { if (n) lastHost = n })
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { showDenied, signInGithub, signInPasskey } from '../store'
+import { showDenied, signInGithub } from '../store'
 import AppIcon from '../components/AppIcon.vue'
 import Led from '../components/Led.vue'
 
@@ -88,10 +88,7 @@ async function sendCode() {
         </div>
         <button type="submit" class="btn pri full" :disabled="sending">{{ otp === 'ok' ? 'Verified' : sending ? 'Checking…' : 'Verify' }}</button>
       </form>
-      <div v-else style="display:grid;gap:4px">
-        <button id="signinBtn" type="button" class="btn pri full" :disabled="!!store.signin.busy" @click="signInGithub"><AppIcon name="login" /> {{ store.signin.busy === 'github' ? 'Waiting for GitHub…' : 'Continue with GitHub' }}</button>
-        <button id="pkBtn" type="button" class="linkbtn" :disabled="!!store.signin.busy" @click="signInPasskey">{{ store.signin.busy === 'passkey' ? 'Waiting for passkey…' : 'Use a passkey instead' }}</button>
-      </div>
+      <button v-else id="signinBtn" type="button" class="btn pri full" :disabled="!!store.signin.busy" @click="signInGithub"><AppIcon name="login" /> {{ store.signin.busy === 'github' ? 'Waiting for GitHub…' : 'Continue with GitHub' }}</button>
       <div class="lock-msg" role="status" aria-live="polite">
         <div v-if="store.signin.denied" class="down">
           <b>GitHub says you are {{ store.signin.denied }}.</b>
@@ -106,7 +103,7 @@ async function sendCode() {
         <li><Led sev="ok" /><span>Reached through nginx proxy manager. Your address is on its access list.</span></li>
         <li><Led sev="ok" /><span>Your GitHub token never leaves this server. Each dev container gets its own SSH key that opens only its repository.</span></li>
         <li><Led sev="ok" /><span>No password exists for this dashboard, so there is none to steal.</span></li>
-        <li><Led sev="ok" /><span>After GitHub, a code from your authenticator app is required too. A passkey added in Settings replaces both.</span></li>
+        <li><Led sev="ok" /><span>After GitHub, a code from your authenticator app is required too.</span></li>
       </ul>
     </div>
   </div>

@@ -1,7 +1,7 @@
-import type { ActivityEvent, ApiCall, ConfigDiff, ConfigResult, ContainerAction, ContainerConfig, DeployRequest, DevContainer, DeviceSession, ExecResult, GitKind, GithubRepo, HostUsage, ImageCheck, PasskeyInfo, RepoActions, SelfUpdateResult, Session, StepUpPrefs, SystemStatus, TelegramClaim, TelegramStatus, RemoveResult, UpdateResult, UsageWindow, Utilization } from '../types'
+import type { ActivityEvent, ApiCall, ConfigDiff, ConfigResult, ContainerAction, ContainerConfig, DeployRequest, DevContainer, DeviceSession, ExecResult, GitKind, GithubRepo, HostUsage, ImageCheck, RepoActions, SelfUpdateResult, Session, SystemStatus, TelegramClaim, TelegramStatus, RemoveResult, UpdateResult, UsageWindow, Utilization } from '../types'
 import { http } from './http'
 
-export { SignedOut, StepUpRequired } from './errors'
+export { SignedOut } from './errors'
 
 // msg is optional (handoff section 8 has none); the store falls back to gitMsg()
 export type GitResult = ExecResult & { msg?: string }
@@ -13,10 +13,6 @@ export interface Api {
   getSession(): Promise<Session | null>
   // leaves the page for GitHub
   signInGithub(): void
-  // sets the session cookie; the caller reloads into the app
-  signInPasskey(): Promise<void>
-  // passkey re-check, returns the new stepUpUntil (ms)
-  stepUp(): Promise<number>
   // all: every device, not only this one
   signOut(all?: boolean): Promise<void>
   getHost(): Promise<HostUsage>
@@ -42,11 +38,6 @@ export interface Api {
   // answers before the server restarts itself; wait for a new bootId on getSystem
   updateDashboard(): Promise<SelfUpdateResult>
   getActivity(): Promise<ActivityEvent[]>
-  listPasskeys(): Promise<PasskeyInfo[]>
-  // code: the authenticator code, needed for the first passkey only
-  addPasskey(name: string, code?: string): Promise<void>
-  removePasskey(id: string): Promise<void>
-  setStepUp(p: Partial<StepUpPrefs>): Promise<StepUpPrefs>
   // '' stops injecting; only later deploys read it
   setClaudeConfig(repo: string): Promise<{ claudeConfigRepo: string }>
   // '' means the image's own; only later deploys and Replace read it

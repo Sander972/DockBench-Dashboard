@@ -86,20 +86,13 @@ export interface GithubRepo { fullName: string; private: boolean; language: stri
 // injectClaudeConfig uses Session.claudeConfigRepo, the server never takes the repo from the request
 export interface DeployRequest { repo: string; project: string; gitUserName: string; gitUserEmail: string; auth: 'device' | 'token'; token?: string; image: string; installClaude: boolean; injectClaudeConfig: boolean; setupRerun: boolean; vscodeConfig: boolean; ghLogin: boolean }
 
-// actions that ask for a passkey again once one is registered
-export type Guarded = 'stop' | 'restart' | 'pull' | 'deploy' | 'update' | 'remove'
-export type StepUpPrefs = Record<Guarded, boolean>
-
-// stepUpUntil: ms until which no passkey check is asked again, null when none is open
 // claudeConfigRepo: owner/name of the ~/.claude repo injected at deploy, '' for none
 // vscodeSettings: VS Code settings.json text seeded into new dev containers, '' for the image's own
 // maxDevices, idleDays: the device limits set in Settings (how many stay signed in, how long one may stay unused)
-export interface Session { user: string; email: string; stepUpUntil: number | null; passkeys: number; stepUp: StepUpPrefs; claudeConfigRepo: string; vscodeSettings: string; maxDevices: number; idleDays: number }
+export interface Session { user: string; email: string; claudeConfigRepo: string; vscodeSettings: string; maxDevices: number; idleDays: number }
 
 // GET /api/sessions: one row per signed-in device, newest activity first; current is the device asking
 export interface DeviceSession { id: string; createdAt: number; lastSeenAt: number; device: string; ip: string; current: boolean }
-
-export interface PasskeyInfo { id: string; name: string; createdAt: string; lastUsedAt: string | null }
 
 export interface ImageCheck { image: string; imageId: string | null; at: number; error: string | null }
 

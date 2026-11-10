@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { attentionCount, cancelStepUp, ciFailCount, hostUse, store, toast, updatesCount } from './store'
+import { attentionCount, ciFailCount, hostUse, store, toast, updatesCount } from './store'
 import { cycleTheme, prefs } from './composables/usePrefs'
 import { useCls } from './lib/format'
 import { narrow } from './router'
@@ -48,11 +48,10 @@ watch(() => store.session, s => {
   else if (s && route.name === 'sign-in') router.replace('/bench')
 })
 
-// Esc closes the passkey panel first, otherwise goes back from the detail on phone
+// Esc goes back from the detail on phone
 function onKey(e: KeyboardEvent) {
   if (e.key !== 'Escape') return
-  if (store.confirm) cancelStepUp()
-  else if (route.name === 'bench' && route.params.id && narrow()) router.push('/bench')
+  if (route.name === 'bench' && route.params.id && narrow()) router.push('/bench')
 }
 document.addEventListener('keydown', onKey)
 onBeforeUnmount(() => document.removeEventListener('keydown', onKey))

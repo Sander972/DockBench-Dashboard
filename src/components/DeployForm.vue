@@ -1,18 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
-import { cancelStepUp, confirmStepUp, deploy, draftErrors, store } from '../store'
+import { computed } from 'vue'
+import { deploy, draftErrors, store } from '../store'
 import { projHelp, stackVars } from '../lib/deploy'
-import StepUpPanel from './StepUpPanel.vue'
 
 const e = draftErrors
 const cfgRepo = computed(() => store.session?.claudeConfigRepo ?? '')
 const vsSettings = computed(() => store.session?.vscodeSettings ?? '')
-const btn = ref<HTMLButtonElement>()
-// Esc or Cancel: put focus back on the Deploy button
-function cancel() {
-  cancelStepUp()
-  nextTick(() => btn.value?.focus())
-}
 </script>
 
 <template>
@@ -60,8 +53,7 @@ function cancel() {
       <div class="sec-h"><h2 class="lbl" id="d3">3 · Review</h2><span class="src-note">Portainer stack</span></div>
       <pre class="term" tabindex="0" aria-label="Stack variables">{{ stackVars(store.draft, cfgRepo, vsSettings) }}</pre>
       <p class="fine">The server pulls the image, then creates the stack with <code>POST /api/stacks/create/standalone/string</code>. It runs the same way as your other stacks.</p>
-      <StepUpPanel v-if="store.confirm?.target === 'deploy'" :action="store.confirm.action" :name="'dockbench-' + store.draft.project" :waiting="store.confirm.waiting" @confirm="confirmStepUp" @cancel="cancel" />
-      <button v-else id="deployBtn" ref="btn" type="button" class="btn pri full" :disabled="Object.keys(e).length > 0" @click="deploy">Deploy dockbench-{{ store.draft.project || '…' }}</button>
+      <button id="deployBtn" type="button" class="btn pri full" :disabled="Object.keys(e).length > 0" @click="deploy">Deploy dockbench-{{ store.draft.project || '…' }}</button>
     </section>
   </div>
 </template>

@@ -1,6 +1,6 @@
 import { computed, reactive, watch } from 'vue'
-import type { ActivityEvent, ApiCall, ConfigDiff, ContainerAction, ContainerConfig, DevContainer, DeviceSession, ExecResult, GitKind, GithubRepo, Guarded, HostUsage, PasskeyInfo, Pending, RepoActions, Session, SystemStatus, TelegramClaim, TelegramStatus, UsageWindow, Utilization } from './types'
-import { api, SignedOut, StepUpRequired } from './api'
+import type { ActivityEvent, ApiCall, ConfigDiff, ContainerAction, ContainerConfig, DevContainer, DeviceSession, ExecResult, GitKind, GithubRepo, HostUsage, Pending, RepoActions, Session, SystemStatus, TelegramClaim, TelegramStatus, UsageWindow, Utilization } from './types'
+import { api, SignedOut } from './api'
 import { feedStale, openLive, sessionGone, staleSnapshot, type Live } from './api/live'
 import { prefs } from './composables/usePrefs'
 import { compare, needsAttention, verdict, type SortKey } from './lib/verdict'
@@ -12,11 +12,10 @@ import { gitMsg } from './lib/format'
 import { finishedRuns, runWord } from './lib/actions'
 import { hostPcts, usageLands } from './lib/usage'
 
-export interface Confirm { target: string; action: Guarded; waiting: boolean } // target is a container id or 'deploy'
 export interface ExecState extends ExecResult { kind: GitKind; running: boolean; msg: string }
 export interface ClaudeLogin { phase: 'starting' | 'link' | 'sending' | 'done' | 'error'; url: string; msg: string }
 // check: msg is from the session check on load, not from a sign-in attempt
-export interface SignIn { busy: 'github' | 'passkey' | null; msg: string; denied: string | null; check?: boolean }
+export interface SignIn { busy: 'github' | null; msg: string; denied: string | null; check?: boolean }
 export interface DeployRun { name: string; calls: ApiCall[]; id: string | null; error: string | null }
 export interface Draft extends DeployDraft { run: DeployRun | null }
 
@@ -36,9 +35,6 @@ export const store = reactive({
   session: null as Session | null,
   signedOut: false, // sign-in heading says "Signed out"
   signin: { busy: null, msg: '', denied: null } as SignIn,
-  confirm: null as Confirm | null,
-  stepUpUntil: 0,
-  passkeys: null as PasskeyInfo[] | null,
   devices: null as DeviceSession[] | null, // Settings: every signed-in device
   // old container id to the new one after an image update recreated it, so an open detail can follow
   replaced: {} as Record<string, string>,
@@ -77,7 +73,7 @@ export const store = reactive({
 })
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-const errText = (e: unknown) => (e instanceof Error ? (e.name === 'NotAllowedError' ? 'The passkey check was cancelled or timed out. Try again.' : e.message) : String(e))
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 const find = (id: string) => store.containers.find(c => c.id === id)
 
 let toastT: ReturnType<typeof setTimeout> | undefined
@@ -163,7 +159,6 @@ async function checkSession() {
 
 function afterSignIn() {
   const s = store.session!
-  store.stepUpUntil = s.stepUpUntil ?? 0
   store.signedOut = false
   store.signin = { busy: null, msg: '', denied: null }
   store.draft = newDraft(s.user, s.email, s.claudeConfigRepo)
@@ -180,18 +175,6 @@ export function signInGithub() {
   api.signInGithub()
 }
 
-// the server sets the session cookie; a full load then fetches the new session, like after the 2FA code
-export async function signInPasskey() {
-  if (store.signin.busy) return
-  store.signin = { busy: 'passkey', msg: '', denied: null }
-  try {
-    await api.signInPasskey()
-    location.assign('/bench')
-  } catch (e) {
-    store.signin = { busy: null, msg: errText(e), denied: null }
-  }
-}
-
 // the OAuth callback sends a non-allowlisted account back to /sign-in?error=denied&login=x; SignInView words the message from denied
 export function showDenied(login: string) {
   store.signin = { busy: null, msg: '', denied: login }
@@ -203,9 +186,6 @@ function expire() {
   rememberSession(null)
   store.session = null
   store.signedOut = true
-  store.confirm = null
-  store.stepUpUntil = 0
-  store.passkeys = null
   store.devices = null
   store.replaced = {}
   store.toastMsg = ''
@@ -220,7 +200,6 @@ function expire() {
   store.vscode = {}
   store.claudeDiff = {}
   store.claudeLogin = {}
-  for (const k in wantCfg) delete wantCfg[k]
   store.activity = []
   store.repos = null
   store.draft = newDraft()
@@ -392,24 +371,8 @@ function paused() {
   return store.dockerDown
 }
 
-// the server asks for a passkey only once one is registered, and only for the actions switched on in Settings
-const needsStep = (a: Guarded) => !!store.session && store.session.passkeys > 0 && store.session.stepUp[a]
-
-// true when the inline passkey panel took over instead
-function guard(target: string, action: Guarded) {
-  if (!needsStep(action) || Date.now() <= store.stepUpUntil) return false
-  store.confirm = { target, action, waiting: false }
-  return true
-}
-
-// the server refused: the window closed in between (or another tab signed in again)
-function askAgain(target: string, action: Guarded) {
-  store.stepUpUntil = 0
-  store.confirm = { target, action, waiting: false }
-}
-
 export function containerAction(id: string, action: ContainerAction) {
-  if (paused() || (action !== 'start' && guard(id, action))) return
+  if (paused()) return
   return runAction(id, action)
 }
 
@@ -425,8 +388,7 @@ async function runAction(id: string, a: ContainerAction) {
   } catch (e) {
     delete store.pending[id]
     c.pending = null
-    if (e instanceof StepUpRequired && a !== 'start') askAgain(id, a)
-    else fail(e)
+    fail(e)
     if (a === 'update' || a === 'remove') loadActivity()
     return
   }
@@ -475,7 +437,7 @@ export async function checkImages() {
 }
 
 export function gitExec(id: string, kind: GitKind) {
-  if (paused() || (kind === 'pull' && guard(id, 'pull'))) return
+  if (paused()) return
   return runGit(id, kind)
 }
 
@@ -490,94 +452,11 @@ async function runGit(id: string, kind: GitKind) {
     toast(r.exitCode ? `${kind === 'fetch' ? 'Fetch' : 'Pull'} failed in ${name}` : `${kind === 'fetch' ? 'Fetched' : 'Pulled'} ${name}`)
   } catch (e) {
     store.execs[id] = undefined
-    if (e instanceof StepUpRequired && kind === 'pull') askAgain(id, 'pull')
-    else fail(e)
+    fail(e)
     return
   }
   poll({ force: true })
   loadActivity()
-}
-
-export async function confirmStepUp() {
-  const cf = store.confirm
-  if (!cf || cf.waiting) return
-  cf.waiting = true
-  try {
-    store.stepUpUntil = await api.stepUp()
-  } catch (e) {
-    cf.waiting = false
-    fail(e)
-    return
-  }
-  store.confirm = null
-  if (cf.target.startsWith('telegram-')) runTelegram(cf.target.slice(9) as TgOp)
-  else if (cf.target.startsWith('system-')) runSystemUpdate(cf.target.slice(7) as 'dashboard' | 'telegram')
-  else if (cf.target.startsWith('config-')) runConfig(cf.target.slice(7))
-  else if (cf.target.startsWith('vscode-')) runReplaceVscode(cf.target.slice(7))
-  else if (cf.target.startsWith('claudecfg-')) runPullClaudeConfig(cf.target.slice(10))
-  else if (cf.action === 'deploy') deploy() // re-validates: the form stays editable while the panel is open
-  else if (cf.action === 'pull') runGit(cf.target, 'pull')
-  else runAction(cf.target, cf.action)
-}
-
-export function cancelStepUp() {
-  if (store.confirm && !store.confirm.waiting) store.confirm = null
-}
-
-/* ---------- passkeys and step-up settings ---------- */
-
-// Settings changes that weaken the guard need a fresh passkey check; the browser prompt is started from the click itself, then the change runs
-export async function unlock() {
-  try {
-    store.stepUpUntil = await api.stepUp()
-    toast('Confirmed. Changes are open for 5 minutes.')
-  } catch (e) { fail(e) }
-}
-
-async function refreshSession() {
-  const s = await api.getSession()
-  if (s) store.session = s
-}
-
-export async function loadPasskeys() {
-  try { store.passkeys = await api.listPasskeys() } catch (e) { fail(e) }
-}
-
-// code: the authenticator code, only for the first passkey; resolves true when added
-export async function addPasskey(name: string, code?: string) {
-  try {
-    await api.addPasskey(name, code)
-  } catch (e) {
-    if (e instanceof StepUpRequired) { store.stepUpUntil = 0; toast('Confirm with an existing passkey first.') }
-    else fail(e)
-    return false
-  }
-  toast(`Added passkey ${name}`)
-  await Promise.all([loadPasskeys(), refreshSession(), loadActivity()])
-  return true
-}
-
-export async function removePasskey(p: PasskeyInfo) {
-  try {
-    await api.removePasskey(p.id)
-  } catch (e) {
-    if (e instanceof StepUpRequired) { store.stepUpUntil = 0; toast('Confirm with a passkey first.') }
-    else fail(e)
-    return
-  }
-  toast(`Removed passkey ${p.name}`)
-  await Promise.all([loadPasskeys(), refreshSession(), loadActivity()])
-}
-
-export async function setStepUp(action: Guarded, on: boolean) {
-  const s = store.session
-  if (!s) return
-  try {
-    s.stepUp = await api.setStepUp({ [action]: on })
-  } catch (e) {
-    if (e instanceof StepUpRequired) { store.stepUpUntil = 0; toast('Confirm with a passkey before turning a check off.') }
-    else fail(e)
-  }
 }
 
 export async function loadDevices() {
@@ -636,19 +515,15 @@ export async function setVscodeSettings(text: string) {
 
 /* ---------- container configuration ---------- */
 
-// the options asked for while the passkey panel is open
-const wantCfg: Record<string, ContainerConfig> = {}
-
-// recreates the container through its stack, so it is guarded like an image update
+// recreates the container through its stack
 export function applyConfig(id: string, cfg: ContainerConfig) {
-  wantCfg[id] = cfg
-  if (paused() || guard('config-' + id, 'update')) return
-  return runConfig(id)
+  if (paused()) return
+  return runConfig(id, cfg)
 }
 
-async function runConfig(id: string) {
-  const c = find(id), cfg = wantCfg[id]
-  if (!c || !cfg || store.pending[id]) return
+async function runConfig(id: string, cfg: ContainerConfig) {
+  const c = find(id)
+  if (!c || store.pending[id]) return
   const name = c.name
   store.pending[id] = 'config'
   c.pending = 'config'
@@ -658,13 +533,10 @@ async function runConfig(id: string) {
   } catch (e) {
     delete store.pending[id]
     c.pending = null
-    // the options stay for the retry after the passkey
-    if (e instanceof StepUpRequired) askAgain('config-' + id, 'update')
-    else { fail(e); delete wantCfg[id] }
+    fail(e)
     loadActivity()
     return
   }
-  delete wantCfg[id]
   if (r.id && r.id !== id) store.replaced[id] = r.id
   // pending stays until the poll has merged the new state, like runAction
   await poll({ force: true })
@@ -691,9 +563,9 @@ export async function loadVscode(id: string, manual = false) {
   v.busy = null
 }
 
-// overwrites edits made in the container, so it is guarded like an image update
+// overwrites edits made in the container
 export function replaceVscode(id: string) {
-  if (vscodeOf(id).busy || paused() || guard('vscode-' + id, 'update')) return
+  if (vscodeOf(id).busy || paused()) return
   return runReplaceVscode(id)
 }
 
@@ -705,8 +577,7 @@ async function runReplaceVscode(id: string) {
     v.settings = (await api.replaceVscode(id)).settings
     toast(`Replaced the VS Code settings in ${find(id)?.name ?? 'the container'}`)
   } catch (e) {
-    if (e instanceof StepUpRequired) askAgain('vscode-' + id, 'update')
-    else fail(e)
+    fail(e)
   }
   v.busy = null
   // a poll during the exec merged the server's `vscode` pending; clear it now instead of at the next poll
@@ -725,9 +596,9 @@ export async function loadClaudeDiff(id: string, manual = false) {
   d.busy = false
 }
 
-// overwrites edits made to ~/.claude in the container, so it is guarded like an image update; the server's `claudeConfig` pending drives the button
+// overwrites edits made to ~/.claude in the container; the server's `claudeConfig` pending drives the button
 export function pullClaudeConfig(id: string) {
-  if (store.pending[id] || paused() || guard('claudecfg-' + id, 'update')) return
+  if (store.pending[id] || paused()) return
   return runPullClaudeConfig(id)
 }
 
@@ -740,8 +611,7 @@ async function runPullClaudeConfig(id: string) {
     toast(`Downloaded the Claude config into ${c.name}${commit ? ` (${commit})` : ''}`)
     loadClaudeDiff(id)
   } catch (e) {
-    if (e instanceof StepUpRequired) askAgain('claudecfg-' + id, 'update')
-    else fail(e)
+    fail(e)
   }
   delete store.pending[id]
   c.pending = null
@@ -808,7 +678,7 @@ export function pickRepo(r: GithubRepo) {
 }
 
 export function deploy() {
-  if (Object.keys(draftErrors.value).length || paused() || guard('deploy', 'deploy')) return
+  if (Object.keys(draftErrors.value).length || paused()) return
   return runDeploy()
 }
 
@@ -824,19 +694,15 @@ async function runDeploy() {
     loadActivity()
     loadRepos(true)
   } catch (e) {
-    if (e instanceof StepUpRequired) { d.run = null; askAgain('deploy', 'deploy') }
-    else {
-      // 409 and 502 carry the call trace, the failed call has no status
-      if (d.run) { d.run.error = errText(e); d.run.calls = (e as { calls?: ApiCall[] }).calls ?? d.run.calls }
-      fail(e)
-      if (store.session) loadActivity()
-    }
+    // 409 and 502 carry the call trace, the failed call has no status
+    if (d.run) { d.run.error = errText(e); d.run.calls = (e as { calls?: ApiCall[] }).calls ?? d.run.calls }
+    fail(e)
+    if (store.session) loadActivity()
   }
 }
 
 export function resetDeploy() {
   store.draft = newDraft(store.session?.user, store.session?.email, store.session?.claudeConfigRepo)
-  if (store.confirm?.target === 'deploy') store.confirm = null
 }
 
 /* ---------- Telegram bot ---------- */
@@ -859,10 +725,8 @@ export async function loadTelegram() {
   }
 }
 
-const TG_GUARD: Record<TgOp, Guarded> = { deploy: 'deploy', claim: 'deploy', update: 'update' }
-
 export function telegramAction(op: TgOp) {
-  if (store.tg.busy || paused() || guard('telegram-' + op, TG_GUARD[op])) return
+  if (store.tg.busy || paused()) return
   return runTelegram(op)
 }
 
@@ -885,12 +749,9 @@ async function runTelegram(op: TgOp) {
       toast(r.upToDate ? 'The bot already runs the newest image, restarted it' : 'Updated the bot to the newest image')
     }
   } catch (e) {
-    if (e instanceof StepUpRequired) askAgain('telegram-' + op, TG_GUARD[op])
-    else {
-      g.error = errText(e)
-      g.calls = (e as { calls?: ApiCall[] }).calls ?? []
-      fail(e)
-    }
+    g.error = errText(e)
+    g.calls = (e as { calls?: ApiCall[] }).calls ?? []
+    fail(e)
   } finally {
     g.busy = null
   }
@@ -977,7 +838,7 @@ export async function checkSystem() {
 }
 
 export function systemUpdate(which: 'dashboard' | 'telegram') {
-  if (store.sys.busy || store.sys.restarting || paused() || guard('system-' + which, 'update')) return
+  if (store.sys.busy || store.sys.restarting || paused()) return
   return runSystemUpdate(which)
 }
 
@@ -1002,12 +863,9 @@ async function runSystemUpdate(which: 'dashboard' | 'telegram') {
     g.restarting = true
     await waitForRestart(before)
   } catch (e) {
-    if (e instanceof StepUpRequired) askAgain('system-' + which, 'update')
-    else {
-      g.error = errText(e)
-      g.calls = (e as { calls?: ApiCall[] }).calls ?? g.calls
-      fail(e)
-    }
+    g.error = errText(e)
+    g.calls = (e as { calls?: ApiCall[] }).calls ?? g.calls
+    fail(e)
   } finally {
     g.busy = null
   }

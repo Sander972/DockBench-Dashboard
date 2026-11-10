@@ -891,76 +891,22 @@ test('a Telegram stack create whose answer was lost but that Portainer created a
   }
 })
 
-// last in the file: passkeys.json turns on step-up, undone at the end
-test('passkey sign-in mints a session and a step-up window; guarded actions and passkey changes need that window', async () => {
-  const { softKey } = await import('./softkey')
-  const { verifyRegistration, writePasskeys } = await import('./passkey')
+test('sign-in is GitHub plus the 2FA code only: a passkeys.json left from before asks for nothing and the passkey routes are gone', async () => {
   await Bun.write(join(dir, 'github.json'), JSON.stringify({ login: 'octocat', id: 7, name: null, avatar_url: '', token: 'gho_x' }))
-  const same = { 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' }
-  const post = (path: string, body: unknown, cookie = '') => fetch(base + path, { method: 'POST', headers: { cookie, ...same }, body: JSON.stringify(body) })
-  const del = (path: string, cookie: string) => fetch(base + path, { method: 'DELETE', headers: { cookie, ...same } })
-  const cookieOf = (r: Response, name: string) => r.headers.getSetCookie().find((c) => c.startsWith(name + '='))!.split(';')[0]
-  const opts = async (path: string, cookie = '') => (await (await post(path, {}, cookie)).json()) as { challenge: string; rpId: string; allowCredentials: unknown[]; excludeCredentials: unknown[] }
-  const deploy = (cookie: string) => post('/api/deploy', {}, cookie)
-
-  expect((await post('/api/auth/passkey/options', {})).status).toBe(400)
-  // without a passkey nothing asks for one: deploy goes straight to body validation
-  expect((await deploy(session)).status).toBe(400)
-
-  const key = softKey('localhost', 'http://localhost:5173')
-  const reg = verifyRegistration(key.create('seed'), { challenge: 'seed', rpId: 'localhost', origin: 'http://localhost:5173' })
-  await writePasskeys(dir, { creds: [{ ...reg, name: 'laptop', createdAt: '', lastUsedAt: null }], stepUp: { stop: true, restart: true, pull: true, deploy: true, update: true, remove: true } })
-
-  const refused = await deploy(session)
-  expect(refused.status).toBe(403)
-  expect(await refused.json()).toEqual({ error: 'step_up_required' })
-
-  const login = await opts('/api/auth/passkey/options')
-  expect(login.rpId).toBe('localhost')
-  expect(login.allowCredentials).toEqual([])
-  expect((await post('/api/auth/passkey/verify', key.get(login.challenge, { o: 'http://evil.example' }))).status).toBe(400)
-  // the failed try used up that challenge
-  expect((await post('/api/auth/passkey/verify', key.get(login.challenge))).status).toBe(400)
-  const ok = await post('/api/auth/passkey/verify', key.get((await opts('/api/auth/passkey/options')).challenge))
-  expect(ok.status).toBe(200)
-  const s = cookieOf(ok, 'session')
-  const u = cookieOf(ok, 'step_up')
-
-  const me = (await (await fetch(`${base}/api/session`, { headers: { cookie: `${s}; ${u}` } })).json()) as { stepUpUntil: number }
-  expect(me).toMatchObject({ user: 'octocat', email: '7+octocat@users.noreply.github.com', passkeys: 1, stepUp: { deploy: true } })
-  expect(me.stepUpUntil).toBeGreaterThan(Date.now())
-  expect((await deploy(`${s}; ${u}`)).status).toBe(400)
-  expect((await deploy(s)).status).toBe(403)
-  expect((await post('/api/containers/abc/vscode', {}, s)).status).toBe(403)
-  // remove has its own step-up, checked before the container is even looked up
-  expect((await post('/api/containers/abc/remove', {}, s)).status).toBe(403)
-  expect(await (await post('/api/containers/abc/remove', {}, s)).json()).toEqual({ error: 'step_up_required' })
-  // a session cookie never passes as a step-up cookie
-  expect((await deploy(`${s}; step_up=${s.slice('session='.length)}`)).status).toBe(403)
-  // a step-up cookie from one device never passes with another device's session
-  const other = await mint()
-  expect((await deploy(`${other}; ${u}`)).status).toBe(403)
-
-  const step = await opts('/api/auth/step-up/options', s)
-  expect(step.allowCredentials).toEqual([{ type: 'public-key', id: key.id }])
-  const granted = await post('/api/auth/step-up/verify', key.get(step.challenge), s)
-  expect(granted.status).toBe(200)
-  expect((await deploy(`${s}; ${cookieOf(granted, 'step_up')}`)).status).toBe(400)
-
-  // a second passkey, loosening a guard and removing a passkey all need the window
-  expect((await post('/api/passkeys/options', {}, s)).status).toBe(403)
-  expect((await post('/api/settings/step-up', { deploy: false }, s)).status).toBe(403)
-  expect((await post('/api/settings/step-up', { deploy: false }, `${s}; ${u}`)).status).toBe(200)
-  expect((await deploy(s)).status).toBe(400)
-  const key2 = softKey('localhost', 'http://localhost:5173')
-  const add = await opts('/api/passkeys/options', `${s}; ${u}`)
-  expect(add.excludeCredentials).toEqual([{ type: 'public-key', id: key.id }])
-  expect((await post('/api/passkeys', { name: 'phone', credential: key2.create(add.challenge) }, s)).status).toBe(201)
-  const list = (await (await fetch(`${base}/api/passkeys`, { headers: { cookie: s } })).json()) as { name: string }[]
-  expect(list.map((p) => p.name)).toEqual(['laptop', 'phone'])
-  expect(JSON.stringify(list)).not.toContain('jwk')
-  expect((await del(`/api/passkeys/${key2.id}`, s)).status).toBe(403)
-  expect((await del(`/api/passkeys/${key2.id}`, `${s}; ${u}`)).status).toBe(200)
-
-  await Bun.write(join(dir, 'passkeys.json'), '{}')
+  await Bun.write(join(dir, 'passkeys.json'), JSON.stringify({ creds: [{ id: 'old', name: 'laptop' }], stepUp: { stop: true, restart: true, pull: true, deploy: true, update: true, remove: true } }))
+  const post = (path: string, cookie = '') => fetch(base + path, { method: 'POST', headers: { cookie, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' }, body: '{}' })
+  dockerFake = () => Response.json([])
+  try {
+    // guarded before: deploy goes straight to body validation, remove to the container lookup
+    expect((await post('/api/deploy', session)).status).toBe(400)
+    expect((await post('/api/containers/abc/remove', session)).status).toBe(404)
+    const me = (await (await fetch(`${base}/api/session`, { headers: { cookie: session } })).json()) as Record<string, unknown>
+    expect(me).toMatchObject({ user: 'octocat' })
+    expect(Object.keys(me)).not.toContain('passkeys')
+    expect(Object.keys(me)).not.toContain('stepUp')
+    for (const path of ['/api/auth/passkey/options', '/api/auth/step-up/options', '/api/passkeys/options', '/api/settings/step-up']) expect((await post(path, session)).status).toBeGreaterThanOrEqual(404)
+  } finally {
+    dockerFake = null
+    await Bun.write(join(dir, 'passkeys.json'), '{}')
+  }
 })

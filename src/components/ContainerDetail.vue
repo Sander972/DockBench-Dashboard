@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onBeforeUpdate, onUpdated, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { applyConfig, cancelStepUp, checkImages, confirmStepUp, containerAction, gitExec, loadClaudeDiff, loadLogs, loadVscode, pullClaudeConfig, refreshLogs, replaceVscode, store, switchClaudeAccount, toast, watchUsage } from '../store'
+import { applyConfig, checkImages, containerAction, gitExec, loadClaudeDiff, loadLogs, loadVscode, pullClaudeConfig, refreshLogs, replaceVscode, store, switchClaudeAccount, toast, watchUsage } from '../store'
 import { prefs } from '../composables/usePrefs'
 import { useNow } from '../composables/useNow'
 import { ago, DISK_BUDGET, dur, gib, ms, repoLabel, repoUrl, since, toGiB, useCls } from '../lib/format'
@@ -15,7 +15,6 @@ import DeviceCodeCallout from './DeviceCodeCallout.vue'
 import ExecPanel from './ExecPanel.vue'
 import HoldButton from './HoldButton.vue'
 import Led from './Led.vue'
-import StepUpPanel from './StepUpPanel.vue'
 import TrendChart from './TrendChart.vue'
 import { actionsUrl, REPO_SEV, REPO_WORD, type Sev } from '../lib/actions'
 
@@ -34,9 +33,6 @@ const run = computed(() => c.value?.state === 'running')
 const fresh = computed(() => run.value && !!st.value && !c.value!.statusError)
 const exec = computed(() => store.execs[props.id])
 const busy = computed(() => !!c.value?.pending || store.dockerDown || !!exec.value?.running)
-const cf = computed(() => (store.confirm?.target === props.id ? store.confirm : null))
-// the Container section's step-up (start, stop, restart, update); pull and remove show theirs in Git and the danger zone
-const cCf = computed(() => (cf.value && cf.value.action !== 'pull' && cf.value.action !== 'remove' ? cf.value : null))
 // a section collapsed from its header stays collapsed on every container's page, remembered in prefs
 const open = (k: string) => !prefs.folded.includes(k)
 const fold = (k: string) => { prefs.folded = open(k) ? [...prefs.folded, k] : prefs.folded.filter(x => x !== k) }
@@ -50,7 +46,7 @@ const hist = computed(() => {
 })
 const ncpu = computed(() => store.host?.ncpu ?? 1)
 const sh = computed(() => props.id.slice(0, 12))
-const hint = computed(() => 'Press and hold about a second to confirm.' + (store.session?.passkeys ? ' Then confirm with your passkey, unless you did in the last 5 minutes.' : ''))
+const hint = 'Press and hold about a second to confirm.'
 
 const imageNote = computed(() => {
   const k = c.value!
@@ -153,12 +149,9 @@ const vsChanged = computed(() => !!c.value && cfg.vscodeConfig !== c.value.confi
 const cfgLast = ref<'claude' | 'vscode'>('claude')
 const applyIn = computed(() => (claudeChanged.value && vsChanged.value ? cfgLast.value : claudeChanged.value ? 'claude' : vsChanged.value ? 'vscode' : null))
 const applyNote = computed(() => `Applying recreates the container${c.value?.imageUpdate ? ' on the newer image already pulled, like Update does' : ''}; /home/dev and the workspace stay.${claudeChanged.value && vsChanged.value ? ` It also applies the ${applyIn.value === 'claude' ? 'VS Code' : 'Claude'} option you changed.` : ''}`)
-const cfgCf = computed(() => (store.confirm?.target === 'config-' + props.id ? store.confirm : null))
 const cfgRepo = computed(() => store.session?.claudeConfigRepo ?? '')
 const vs = computed(() => store.vscode[props.id])
-const vsCf = computed(() => (store.confirm?.target === 'vscode-' + props.id ? store.confirm : null))
 const vsGlobal = computed(() => !!store.session?.vscodeSettings)
-const ccCf = computed(() => (store.confirm?.target === 'claudecfg-' + props.id ? store.confirm : null))
 const cd = computed(() => store.claudeDiff[props.id])
 const cdRows = computed(() => diffRows(cd.value?.data?.diff ?? ''))
 const cdFiles = computed(() => cdRows.value.filter(r => r.kind === 'file').length)
@@ -266,12 +259,11 @@ onUpdated(() => {
 
         <section class="sec" :aria-labelledby="'cl-' + c.id">
           <div class="sec-h"><h3 :id="'cl-' + c.id" class="lbl"><button type="button" class="sec-tg" :aria-expanded="open('cl')" @click="fold('cl')">Claude</button></h3><span class="sec-st" :class="sums.cl.sev && 's-' + sums.cl.sev" :title="sums.cl.src">{{ sums.cl.t }}<template v-if="c.config.injectClaudeConfig"> · Config: {{ cdSum }}</template></span>
-            <div v-if="c.config.injectClaudeConfig && !ccCf" class="btns tight">
+            <div v-if="c.config.injectClaudeConfig" class="btns tight">
               <button type="button" class="btn sm" :aria-disabled="!run || !!cd?.busy || undefined" title="Compare ~/.claude in the container with your config repo" @click="run && !cd?.busy && loadClaudeDiff(c.id, true)"><AppIcon name="refresh" /> Check</button>
               <HoldButton data-hold="claudecfg" class="sm" :disabled="!run || busy" @confirm="pullClaudeConfig(c.id)" @early="early">{{ c.pending === 'claudeConfig' ? 'Downloading…' : 'Hold to re-download' }}</HoldButton>
             </div>
           </div>
-          <StepUpPanel v-if="c.config.injectClaudeConfig && ccCf" data-hold="claudecfg" action="update" :name="c.name" text="Downloads your Claude config repo again over ~/.claude in the container, edits made there to its files included." :waiting="ccCf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
           <template v-if="open('cl')">
           <dl v-if="st" class="facts">
             <dt>Claude Code</dt>
@@ -293,8 +285,7 @@ onUpdated(() => {
             </label>
           </div>
           <template v-if="applyIn === 'claude'">
-            <StepUpPanel v-if="cfgCf" data-hold="config" action="update" :name="c.name" :text="`Recreates ${c.name} from its Portainer stack with the new options${c.imageUpdate ? ', on the newer image already pulled' : ''}. /home/dev and the workspace stay; the tunnel drops until the new container is up.`" :waiting="cfgCf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-            <div v-else class="act">
+            <div class="act">
               <div class="btns tight"><HoldButton data-hold="config" class="sm" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="applyConfig(c.id, { ...cfg })" @early="early">{{ c.pending === 'config' ? 'Applying…' : 'Hold to apply and recreate' }}</HoldButton></div>
               <p class="fine">{{ applyNote }}</p>
             </div>
@@ -313,13 +304,12 @@ onUpdated(() => {
 
         <section class="sec" :aria-labelledby="'c-' + c.id">
           <div class="sec-h"><h3 :id="'c-' + c.id" class="lbl"><button type="button" class="sec-tg" :aria-expanded="open('c')" @click="fold('c')">Container</button></h3><span class="sec-st" :class="sums.c.sev && 's-' + sums.c.sev" :title="sums.c.src">{{ sums.c.t }}</span>
-            <div v-if="!cCf" class="btns tight">
+            <div class="btns tight">
               <HoldButton v-if="run || c.state === 'restarting'" data-hold="stop" class="sm" danger :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'stop')" @early="early">Hold to stop</HoldButton>
               <button v-else type="button" class="btn sm pri" :aria-disabled="busy || undefined" @click="busy || containerAction(c.id, 'start')">Start</button>
               <HoldButton data-hold="update" class="sm" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'update')" @early="early">{{ c.pending === 'update' ? 'Updating…' : 'Hold to update' }}</HoldButton>
             </div>
           </div>
-          <StepUpPanel v-if="cCf" :data-hold="cCf.action" :action="cCf.action" :name="c.name" :waiting="cCf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
           <template v-if="open('c')">
           <dl class="facts">
             <dt>State</dt><dd><span class="num">{{ c.state }}{{ c.state === 'exited' ? ` · exit ${c.exitCode}` : '' }}</span> · <span class="num">{{ c.restartCount }}</span> restart{{ c.restartCount === 1 ? '' : 's' }}</dd>
@@ -332,7 +322,7 @@ onUpdated(() => {
               <dd><template v-if="fresh"><span title="Starts after setup, so it trails the container">up {{ dur(st.uptime_seconds + (now - ms(c.statusFetchedAt ?? now)) / 1000) }}</span></template><span v-else class="s-bad">not answering</span></dd>
             </template>
           </dl>
-          <div v-if="!cCf" class="btns tight">
+          <div class="btns tight">
             <HoldButton v-if="run" data-hold="restart" class="sm" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'restart')" @early="early"><AppIcon name="refresh" /> Hold to restart</HoldButton>
             <button type="button" class="btn sm" :aria-disabled="checking || store.dockerDown || undefined" @click="checking || store.dockerDown || check()">{{ checking ? 'Checking…' : 'Check for update' }}</button>
           </div>
@@ -347,8 +337,7 @@ onUpdated(() => {
             <label class="check"><input v-model="cfg.vscodeConfig" type="checkbox" :disabled="busy" @change="cfgLast = 'vscode'"><span>Apply my VS Code settings</span><small>Written only when the home volume has no VS Code Machine settings yet. To change them now, use Replace below.</small></label>
           </div>
           <template v-if="applyIn === 'vscode'">
-            <StepUpPanel v-if="cfgCf" data-hold="config" action="update" :name="c.name" :text="`Recreates ${c.name} from its Portainer stack with the new options${c.imageUpdate ? ', on the newer image already pulled' : ''}. /home/dev and the workspace stay; the tunnel drops until the new container is up.`" :waiting="cfgCf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-            <div v-else class="act">
+            <div class="act">
               <div class="btns tight"><HoldButton data-hold="config" class="sm" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="applyConfig(c.id, { ...cfg })" @early="early">{{ c.pending === 'config' ? 'Applying…' : 'Hold to apply and recreate' }}</HoldButton></div>
               <p class="fine">{{ applyNote }}</p>
             </div>
@@ -359,8 +348,7 @@ onUpdated(() => {
               <div class="fold-b">
                 <pre v-if="vs?.settings" class="term" tabindex="0" aria-label="VS Code Machine settings">{{ vs.settings }}</pre>
                 <p v-else class="fine">{{ !run ? 'Start the container to read them.' : vs?.busy === 'load' ? 'Loading…' : !vs ? 'Read once the container answers /status. Press Reload to read them now.' : vs.settings === undefined ? 'Could not read them. Press Reload to try again.' : vs.settings === '' ? 'The file is empty. VS Code uses only your own settings here.' : 'None. VS Code uses only your own settings here.' }}</p>
-                <StepUpPanel v-if="vsCf" data-hold="vscode" action="update" :name="c.name" text="Overwrites the VS Code Machine settings in the container with yours, edits made in the container included." :waiting="vsCf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-                <div v-else class="btns tight">
+                <div class="btns tight">
                   <button type="button" class="btn sm" :aria-disabled="!run || !!vs?.busy || undefined" @click="run && !vs?.busy && loadVscode(c.id, true)"><AppIcon name="refresh" /> Reload</button>
                   <HoldButton data-hold="vscode" class="sm" :disabled="!run || busy || !!vs?.busy || !vsGlobal" @confirm="replaceVscode(c.id)" @early="early">{{ vs?.busy === 'replace' || c.pending === 'vscode' ? 'Replacing…' : 'Hold to replace with my settings' }}</HoldButton>
                 </div>
@@ -381,8 +369,7 @@ onUpdated(() => {
               <p v-if="st.last_commit"><span class="num">{{ st.last_commit.sha }}</span> {{ st.last_commit.message }} <span class="dim">· {{ ago(st.last_commit.date, now) }}</span></p>
               <p v-else class="dim">No commits</p>
             </div>
-            <StepUpPanel v-if="cf?.action === 'pull'" data-hold="pull" action="pull" :name="c.name" :waiting="cf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-            <div v-else class="btns tight">
+            <div class="btns tight">
               <button type="button" class="btn sm" :aria-disabled="!fresh || busy || undefined" @click="fresh && !busy && gitExec(c.id, 'fetch')">{{ exec?.running && exec.kind === 'fetch' ? 'Fetching…' : 'Fetch' }}</button>
               <HoldButton data-hold="pull" class="sm" :disabled="!fresh || busy" :aria-describedby="'hold-hint-' + c.id" @confirm="gitExec(c.id, 'pull')" @early="early">{{ exec?.running && exec.kind === 'pull' ? 'Pulling…' : 'Hold to pull' }}</HoldButton>
             </div>
@@ -415,13 +402,10 @@ onUpdated(() => {
           <details class="fold danger">
             <summary><span class="lbl">Danger zone</span><span class="sec-st">Purge the container, its /home/dev volume and deploy keys</span></summary>
             <div class="fold-b">
-              <StepUpPanel v-if="cf?.action === 'remove'" data-hold="remove" action="remove" :name="c.name" :waiting="cf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-              <template v-else>
-                <div class="field"><label :for="'rm-' + c.id">Type <code>{{ c.name }}</code> to purge it</label><input :id="'rm-' + c.id" v-model="rmName" class="inp num" autocomplete="off" autocapitalize="none" spellcheck="false" :disabled="busy" :aria-describedby="'rm-note-' + c.id"></div>
-                <div class="btns tight">
-                  <HoldButton data-hold="remove" class="sm" danger :disabled="busy || rmName.trim() !== c.name" :aria-describedby="'rm-note-' + c.id + ' hold-hint-' + c.id" @confirm="containerAction(c.id, 'remove')" @early="early">{{ c.pending === 'remove' ? 'Purging…' : 'Hold to purge container' }}</HoldButton>
-                </div>
-              </template>
+              <div class="field"><label :for="'rm-' + c.id">Type <code>{{ c.name }}</code> to purge it</label><input :id="'rm-' + c.id" v-model="rmName" class="inp num" autocomplete="off" autocapitalize="none" spellcheck="false" :disabled="busy" :aria-describedby="'rm-note-' + c.id"></div>
+              <div class="btns tight">
+                <HoldButton data-hold="remove" class="sm" danger :disabled="busy || rmName.trim() !== c.name" :aria-describedby="'rm-note-' + c.id + ' hold-hint-' + c.id" @confirm="containerAction(c.id, 'remove')" @early="early">{{ c.pending === 'remove' ? 'Purging…' : 'Hold to purge container' }}</HoldButton>
+              </div>
               <p :id="'rm-note-' + c.id" class="fine" :class="{ 's-warn': lost }">Purge deletes the Portainer stack, the container, its /home/dev volume with the workspace{{ lost ? `, including ${lost}` : '' }}, and its deploy keys on GitHub. It cannot be undone.</p>
             </div>
           </details>

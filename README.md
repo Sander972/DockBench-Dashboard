@@ -125,7 +125,7 @@ Add a proxy host that forwards `dock.example.com` to `dockbench-dashboard` on po
 
 ### 7. Sign in
 
-Open the dashboard, continue with GitHub, then type the 6-digit code from your authenticator. In **Settings** you can add a passkey, which then signs you in by itself and confirms destructive actions.
+Open the dashboard, continue with GitHub, then type the 6-digit code from your authenticator.
 
 > [!NOTE]
 > The dashboard pulls images through Portainer. Public images need nothing more. For private images, add a `ghcr.io` entry under Portainer's **Registries** with a token that has `read:packages`; the dashboard uses it automatically.
@@ -154,9 +154,8 @@ All settings are environment variables, read once at start. A missing required o
 
 The dashboard mounts the Docker socket, so whoever controls it controls the server. It is built around that:
 
-- **One user.** Only `GITHUB_LOGIN` can sign in, and only with a second factor: a TOTP code after GitHub, or a passkey instead of both.
+- **One user.** Only `GITHUB_LOGIN` can sign in, and only with a second factor: a TOTP code after GitHub.
 - **Device sessions.** Every signed-in device is listed in Settings and can be signed out. Sessions expire when idle and after 30 days at most, and their number is capped.
-- **Step-up for destructive actions.** Once you have a passkey, actions like stop, update, deploy or purge ask for it again (each check can be turned off in Settings).
 - **Narrow credentials for containers.** The GitHub token stays on the server. Each dev container gets a deploy key valid for its own repository only; signing `gh` in inside the container is an explicit per-deploy choice.
 - **No secrets in logs.** Tokens, keys and codes never reach the activity log, the server log or error messages.
 - **Same-origin writes.** Every write must come from the dashboard's own origin.
