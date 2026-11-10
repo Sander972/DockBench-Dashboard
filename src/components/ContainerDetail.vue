@@ -35,6 +35,9 @@ const fresh = computed(() => run.value && !!st.value && !c.value!.statusError)
 const exec = computed(() => store.execs[props.id])
 const busy = computed(() => !!c.value?.pending || store.dockerDown || !!exec.value?.running)
 const cf = computed(() => (store.confirm?.target === props.id ? store.confirm : null))
+// a section collapsed from its header stays collapsed on every container's page, remembered in prefs
+const open = (k: string) => !prefs.folded.includes(k)
+const fold = (k: string) => { prefs.folded = open(k) ? [...prefs.folded, k] : prefs.folded.filter(x => x !== k) }
 // the trend reads the collector's history, loaded while this detail is mounted; by name, so a recreated container keeps its line
 onBeforeUnmount(watchUsage())
 const hist = computed(() => {
@@ -226,7 +229,8 @@ onUpdated(() => {
 
       <div class="plate panel">
         <section class="sec" :aria-labelledby="'r-' + c.id">
-          <div class="sec-h"><h3 :id="'r-' + c.id" class="lbl">Resources</h3><span class="src-note">Docker stats · every {{ prefs.poll }}s</span></div>
+          <div class="sec-h"><h3 :id="'r-' + c.id" class="lbl"><button type="button" class="sec-tg" :aria-expanded="open('r')" @click="fold('r')">Resources</button></h3><span class="src-note">Docker stats · every {{ prefs.poll }}s</span></div>
+          <template v-if="open('r')">
           <div class="vitals">
             <template v-if="run">
               <div class="vital"><span class="lbl c-cpu">CPU</span><span class="num big" :class="useCls(cpuPct(c))">{{ cpuPct(c).toFixed(1) }}%</span><span class="num v-sub">{{ ((cpuPct(c) / 100) * ncpu).toFixed(1) }}/{{ ncpu }} cores</span></div>
@@ -237,10 +241,12 @@ onUpdated(() => {
           <TrendChart v-if="run && hist" :cpu="hist.cpu" :mem="hist.mem" :from="hist.from" :to="hist.to" :step="hist.step" />
           <p v-else-if="run" class="fine">{{ store.usage.error ? 'The collector is not answering, so there is no history.' : store.usage.data ? 'No history for this container yet.' : 'Loading the history…' }}</p>
           <p v-else class="fine">Docker reports no CPU or memory for a {{ c.state === 'exited' ? 'stopped' : c.state }} container.</p>
+          </template>
         </section>
 
         <section class="sec" :aria-labelledby="'cl-' + c.id">
-          <div class="sec-h"><h3 :id="'cl-' + c.id" class="lbl">Claude</h3><span class="src-note">/status · stack variables</span></div>
+          <div class="sec-h"><h3 :id="'cl-' + c.id" class="lbl"><button type="button" class="sec-tg" :aria-expanded="open('cl')" @click="fold('cl')">Claude</button></h3><span class="src-note">/status · stack variables</span></div>
+          <template v-if="open('cl')">
           <dl v-if="st" class="facts">
             <dt>Claude Code</dt>
             <dd>{{ st.claude_installed === false ? 'Not installed' : st.claude_logged_in ? 'Credentials present' : 'Not signed in' }}<span v-if="st.claude_installed !== false && st.claude_version" class="num"> · {{ st.claude_version }}</span>
@@ -286,10 +292,12 @@ onUpdated(() => {
               </div>
             </details>
           </div>
+          </template>
         </section>
 
         <section class="sec" :aria-labelledby="'c-' + c.id">
-          <div class="sec-h"><h3 :id="'c-' + c.id" class="lbl">Container</h3><span class="src-note">Docker API · /status</span></div>
+          <div class="sec-h"><h3 :id="'c-' + c.id" class="lbl"><button type="button" class="sec-tg" :aria-expanded="open('c')" @click="fold('c')">Container</button></h3><span class="src-note">Docker API · /status</span></div>
+          <template v-if="open('c')">
           <dl class="facts">
             <dt>State</dt><dd><span class="num">{{ c.state }}{{ c.state === 'exited' ? ` · exit ${c.exitCode}` : '' }}</span> · <span class="num">{{ c.restartCount }}</span> restart{{ c.restartCount === 1 ? '' : 's' }}</dd>
             <dt>Started</dt><dd class="num">{{ c.startedAt ? new Date(c.startedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : 'never started' }}</dd>
@@ -312,10 +320,12 @@ onUpdated(() => {
             <HoldButton data-hold="update" class="sm" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'update')" @early="early">{{ c.pending === 'update' ? 'Updating…' : c.imageUpdate ? 'Hold to update' : 'Hold to pull and restart' }}</HoldButton>
           </div>
           <p :id="'hold-hint-' + c.id" class="fine">{{ hint }}</p>
+          </template>
         </section>
 
         <section class="sec" :aria-labelledby="'vs-' + c.id">
-          <div class="sec-h"><h3 :id="'vs-' + c.id" class="lbl">VS Code settings</h3><span class="src-note">stack variable · Machine settings</span></div>
+          <div class="sec-h"><h3 :id="'vs-' + c.id" class="lbl"><button type="button" class="sec-tg" :aria-expanded="open('vs')" @click="fold('vs')">VS Code settings</button></h3><span class="src-note">stack variable · Machine settings</span></div>
+          <template v-if="open('vs')">
           <div class="checks">
             <label class="check"><input v-model="cfg.vscodeConfig" type="checkbox" :disabled="busy" @change="cfgLast = 'vscode'"><span>Apply my VS Code settings</span><small>Written only when the home volume has no VS Code Machine settings yet. To change them now, use Replace below.</small></label>
           </div>
@@ -341,11 +351,13 @@ onUpdated(() => {
               </div>
             </details>
           </div>
+          </template>
         </section>
 
         <div v-if="st || store.ci[c.name]" class="duo">
           <section v-if="st" class="sec" :aria-labelledby="'g-' + c.id">
-            <div class="sec-h"><h3 :id="'g-' + c.id" class="lbl">Git</h3><span class="src-note">{{ fresh ? '/status · just now' : 'last answer from /status' }}</span></div>
+            <div class="sec-h"><h3 :id="'g-' + c.id" class="lbl"><button type="button" class="sec-tg" :aria-expanded="open('g')" @click="fold('g')">Git</button></h3><span class="src-note">{{ fresh ? '/status · just now' : 'last answer from /status' }}</span></div>
+            <template v-if="open('g')">
             <div class="lines">
               <p><a v-if="st.repo" :href="repoUrl(st.repo)!" target="_blank" rel="noopener noreferrer">{{ repoLabel(st.repo) }}</a><span v-else class="dim">REPO_URL is not set</span> · <span class="num">{{ st.branch === 'HEAD' ? 'detached HEAD' : st.branch ?? 'Not a git repo' }}</span></p>
               <p>{{ changes }} · {{ upstream }}<span v-if="st.ahead != null" class="dim"> · {{ c.lastFetchAt ? `fetched ${ago(c.lastFetchAt, now)}` : 'as of the last fetch' }}</span></p>
@@ -358,11 +370,14 @@ onUpdated(() => {
               <HoldButton data-hold="pull" class="sm" :disabled="!fresh || busy" :aria-describedby="'hold-hint-' + c.id" @confirm="gitExec(c.id, 'pull')" @early="early">{{ exec?.running && exec.kind === 'pull' ? 'Pulling…' : 'Hold to pull' }}</HoldButton>
             </div>
             <ExecPanel v-if="exec" :x="exec" />
+            </template>
           </section>
 
           <section v-if="store.ci[c.name]" class="sec" :aria-labelledby="'ci-' + c.id">
-            <div class="sec-h ci-h"><h3 :id="'ci-' + c.id" class="lbl">CI<span class="ci-long"> · GitHub Actions</span></h3><span class="src-note">{{ store.ci[c.name].repo }}</span><a class="btn sm" :href="actionsUrl(store.ci[c.name].repo)" target="_blank" rel="noopener">All runs on GitHub <AppIcon name="ext" /></a></div>
+            <div class="sec-h ci-h"><h3 :id="'ci-' + c.id" class="lbl"><button type="button" class="sec-tg" :aria-expanded="open('ci')" @click="fold('ci')"><span>CI<span class="ci-long"> · GitHub Actions</span></span></button></h3><span class="src-note">{{ store.ci[c.name].repo }}</span><a class="btn sm" :href="actionsUrl(store.ci[c.name].repo)" target="_blank" rel="noopener">All runs on GitHub <AppIcon name="ext" /></a></div>
+            <template v-if="open('ci')">
             <CiRuns :a="store.ci[c.name]" no-link />
+            </template>
           </section>
         </div>
 

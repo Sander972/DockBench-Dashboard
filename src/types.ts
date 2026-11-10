@@ -117,6 +117,7 @@ export interface Prefs {
   poll: 2 | 5 | 15
   compact: boolean
   notify: boolean // system notifications while the dashboard is in the background
+  folded: string[] // container page sections collapsed from their header
 }
 
 // GET /status of the Telegram bot, passed through by GET /api/telegram

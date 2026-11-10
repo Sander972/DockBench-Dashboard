@@ -3,7 +3,7 @@ import type { Prefs } from '../types'
 import { onAccent } from '../lib/format'
 
 const KEY = 'dockbench.prefs'
-const DEFAULTS: Prefs = { theme: 'system', accent: '#f0c22b', poll: 5, compact: false, notify: false }
+const DEFAULTS: Prefs = { theme: 'system', accent: '#f0c22b', poll: 5, compact: false, notify: false, folded: [] }
 
 function load(): Partial<Prefs> { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {} } catch { return {} } }
 

@@ -271,6 +271,10 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 .panel > * + *{border-top:1px solid var(--line-2)}
 .sec-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .src-note{font-size:.6875rem;color:var(--fg-3)}
+.sec-tg{border:0;background:none;padding:0;letter-spacing:inherit;text-transform:inherit;display:inline-flex;align-items:center;gap:8px;padding-block:10px;margin-block:-10px}
+.sec-tg::before{content:"";flex:none;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);transition:transform .12s cubic-bezier(.22,1,.36,1)}
+.sec-tg[aria-expanded="false"]::before{transform:rotate(-45deg)}
+.sec-tg:hover{color:var(--fg)}
 
 .callout{display:grid;gap:10px;padding:14px;border-radius:9px;border:1px solid}
 .callout.warn{background:var(--warn-wash);border-color:color-mix(in oklch,var(--warn) 45%,var(--line))}
