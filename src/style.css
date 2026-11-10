@@ -271,6 +271,7 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 .panel > * + *{border-top:1px solid var(--line-2)}
 .sec-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .src-note{font-size:.6875rem;color:var(--fg-3)}
+.sec-st{margin-left:auto;font-size:.8125rem;color:var(--fg-2);text-align:right} /* detail: the section's current status, its source in the tooltip */
 .sec-tg{border:0;background:none;padding:0;letter-spacing:inherit;text-transform:inherit;display:inline-flex;align-items:center;gap:8px;padding-block:10px;margin-block:-10px}
 .sec-tg::before{content:"";flex:none;width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);transition:transform .12s cubic-bezier(.22,1,.36,1)}
 .sec-tg[aria-expanded="false"]::before{transform:rotate(-45deg)}
@@ -292,12 +293,15 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 .open .btn{padding:0 12px;font-size:.875rem}
 .d-note{flex:1 0 100%}
 
-/* vitals: one line per figure (label, percentage, used/total), then one trend chart for CPU and RAM */
+/* vitals: one line per figure (label, percentage, used/total) in the Resources header, then one trend chart for CPU and RAM */
 .vitals{display:flex;flex-wrap:wrap;gap:8px 32px}
 .vital{display:flex;align-items:baseline;gap:8px;min-width:0;white-space:nowrap}
 .vital .big{font-size:1.125rem;font-weight:500;letter-spacing:-.01em}
 .v-sub{font-size:.75rem;color:var(--fg-2)}
 .vital .c-cpu{color:var(--t-cpu)} .vital .c-mem{color:var(--t-mem)}
+.sec-h > .vitals{margin-left:auto;gap:4px 20px} /* in the Resources header, so the figures show with the section collapsed */
+.sec-h .vital{gap:6px}
+.sec-h .vital .big{font-size:.8125rem;font-weight:600}
 .trend-plot{position:relative;height:72px}
 .trend svg{display:block;width:100%;height:100%;touch-action:pan-y;cursor:crosshair;overflow:visible}
 .trend .grid{stroke:var(--line);stroke-dasharray:2 3;vector-effect:non-scaling-stroke}
@@ -320,14 +324,16 @@ main{padding:0 16px calc(96px + env(safe-area-inset-bottom,0px))}
 .lines p{overflow-wrap:anywhere}
 .lines .num{font-size:.8125rem}
 .btns.tight > *{flex:0 1 auto}
+.sec-h > .btns{margin-block:-8px} /* buttons in a header row (Claude config Check / re-download) keep it as tall as the others */
+.cc{display:grid;gap:8px;border-top:1px solid var(--line-2);padding-top:14px} /* Claude config: notes and the diff at the bottom of the Claude section */
 a.src-note{display:inline-flex;align-items:center;gap:4px;color:var(--fg-2);text-decoration:none}
 a.src-note:hover{color:var(--fg)}
 .src-note .i{width:12px;height:12px}
-/* CI header: title left, repo centered, GitHub button right, on one row */
+/* CI header: title left, status, then the link to all runs on GitHub, on one row */
 .ci-h{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center}
 .ci-h > h3{white-space:nowrap}
 @container (min-width:720px){.duo > .sec:not(:only-child) .ci-long{display:none}} /* half width beside Git: title shortened to "CI" */
-.ci-h > .src-note{text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ci-h > .sec-st{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .btn.inl{margin-left:8px}
 .duo dl.facts{grid-template-columns:minmax(5.5rem,auto) minmax(0,1fr);gap:6px 12px}
 .facts .tag{padding:3px 6px}
@@ -345,7 +351,11 @@ a.src-note:hover{color:var(--fg)}
 .fold-t{font-weight:600;font-size:.9375rem}
 .fold-s{margin-left:auto;font-size:.8125rem;color:var(--fg-2)}
 .fold-b{display:grid;gap:12px;padding:4px 0 8px}
-.fold.danger .fold-t{color:var(--bad-ink)}
+.fold.danger > summary .lbl{color:var(--bad-ink)}
+/* Log and Danger zone: their closed rows read like the collapsible section headers above them */
+.panel > .sec > .fold > summary{min-height:0;padding-block:10px;margin-block:-10px;gap:2px 8px}
+.panel > .sec > .fold > summary::before{width:5px;height:5px;margin:0;border-color:var(--fg-2)}
+.panel > .sec > .fold > .fold-b{padding:14px 0 0}
 .term.log{max-height:240px}
 /* switch: a checkbox drawn as a sliding toggle (log auto-refresh) */
 .tgl{display:inline-flex;align-items:center;gap:10px;min-height:44px;font-size:.875rem;cursor:pointer}
