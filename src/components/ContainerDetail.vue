@@ -35,6 +35,8 @@ const fresh = computed(() => run.value && !!st.value && !c.value!.statusError)
 const exec = computed(() => store.execs[props.id])
 const busy = computed(() => !!c.value?.pending || store.dockerDown || !!exec.value?.running)
 const cf = computed(() => (store.confirm?.target === props.id ? store.confirm : null))
+// the Container section's step-up (start, stop, restart, update); pull and remove show theirs in Git and the danger zone
+const cCf = computed(() => (cf.value && cf.value.action !== 'pull' && cf.value.action !== 'remove' ? cf.value : null))
 // a section collapsed from its header stays collapsed on every container's page, remembered in prefs
 const open = (k: string) => !prefs.folded.includes(k)
 const fold = (k: string) => { prefs.folded = open(k) ? [...prefs.folded, k] : prefs.folded.filter(x => x !== k) }
@@ -310,7 +312,14 @@ onUpdated(() => {
         </section>
 
         <section class="sec" :aria-labelledby="'c-' + c.id">
-          <div class="sec-h"><h3 :id="'c-' + c.id" class="lbl"><button type="button" class="sec-tg" :aria-expanded="open('c')" @click="fold('c')">Container</button></h3><span class="sec-st" :class="sums.c.sev && 's-' + sums.c.sev" :title="sums.c.src">{{ sums.c.t }}</span></div>
+          <div class="sec-h"><h3 :id="'c-' + c.id" class="lbl"><button type="button" class="sec-tg" :aria-expanded="open('c')" @click="fold('c')">Container</button></h3><span class="sec-st" :class="sums.c.sev && 's-' + sums.c.sev" :title="sums.c.src">{{ sums.c.t }}</span>
+            <div v-if="!cCf" class="btns tight">
+              <HoldButton v-if="run || c.state === 'restarting'" data-hold="stop" class="sm" danger :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'stop')" @early="early">Hold to stop</HoldButton>
+              <button v-else type="button" class="btn sm pri" :aria-disabled="busy || undefined" @click="busy || containerAction(c.id, 'start')">Start</button>
+              <HoldButton data-hold="update" class="sm" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'update')" @early="early">{{ c.pending === 'update' ? 'Updating…' : 'Hold to update' }}</HoldButton>
+            </div>
+          </div>
+          <StepUpPanel v-if="cCf" :data-hold="cCf.action" :action="cCf.action" :name="c.name" :waiting="cCf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
           <template v-if="open('c')">
           <dl class="facts">
             <dt>State</dt><dd><span class="num">{{ c.state }}{{ c.state === 'exited' ? ` · exit ${c.exitCode}` : '' }}</span> · <span class="num">{{ c.restartCount }}</span> restart{{ c.restartCount === 1 ? '' : 's' }}</dd>
@@ -323,15 +332,9 @@ onUpdated(() => {
               <dd><template v-if="fresh"><span title="Starts after setup, so it trails the container">up {{ dur(st.uptime_seconds + (now - ms(c.statusFetchedAt ?? now)) / 1000) }}</span></template><span v-else class="s-bad">not answering</span></dd>
             </template>
           </dl>
-          <StepUpPanel v-if="cf && cf.action !== 'pull' && cf.action !== 'remove'" :data-hold="cf.action" :action="cf.action" :name="c.name" :waiting="cf.waiting" @confirm="confirmStepUp" @cancel="cancelStepUp" />
-          <div v-else class="btns tight">
-            <template v-if="run || c.state === 'restarting'">
-              <HoldButton v-if="run" data-hold="restart" class="sm" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'restart')" @early="early"><AppIcon name="refresh" /> Hold to restart</HoldButton>
-              <HoldButton data-hold="stop" class="sm" danger :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'stop')" @early="early">Hold to stop</HoldButton>
-            </template>
-            <button v-else type="button" class="btn sm pri" :aria-disabled="busy || undefined" @click="busy || containerAction(c.id, 'start')">Start</button>
+          <div v-if="!cCf" class="btns tight">
+            <HoldButton v-if="run" data-hold="restart" class="sm" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'restart')" @early="early"><AppIcon name="refresh" /> Hold to restart</HoldButton>
             <button type="button" class="btn sm" :aria-disabled="checking || store.dockerDown || undefined" @click="checking || store.dockerDown || check()">{{ checking ? 'Checking…' : 'Check for update' }}</button>
-            <HoldButton data-hold="update" class="sm" :disabled="busy" :aria-describedby="'hold-hint-' + c.id" @confirm="containerAction(c.id, 'update')" @early="early">{{ c.pending === 'update' ? 'Updating…' : c.imageUpdate ? 'Hold to update' : 'Hold to pull and restart' }}</HoldButton>
           </div>
           <p :id="'hold-hint-' + c.id" class="fine">{{ hint }}</p>
           </template>
