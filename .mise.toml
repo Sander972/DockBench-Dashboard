@@ -1,4 +1,5 @@
-# DockBench dev container runtime; bun comes with the image. Major matches docker/Dockerfile: vue-tsc needs real Node, not bun's. rust builds and tests the utilization collector in collector/.
+# DockBench dev container runtime. Majors match docker/Dockerfile (oven/bun:1 and its Node 22 build stage): vue-tsc needs real Node, not bun's. rust builds and tests the utilization collector in collector/.
 [tools]
+bun = "1"
 node = "22"
 rust = "1.91"
