@@ -1,6 +1,7 @@
 import type { ContainerRow } from './docker'
 import { HttpError } from './http'
 import type { ApiCall } from './store'
+import { deleteKeys } from './remove'
 
 export const PROJECT_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 export const REPO_RE = /^[\w.-]+\/[\w.-]+$/
@@ -46,6 +47,9 @@ export interface DeployDeps {
   // the read-only key on the Claude config repo, called only when deploy gets a configRepo
   createConfigKey?: () => Promise<{ id: number }>
   deleteConfigKey?: (id: number) => Promise<void>
+  // keys already titled dockbench-<project> on each repo: with no container and no stack of that name nothing uses them, they are what a failed deploy or a hand-removed container left
+  oldDeployKeys?: () => Promise<{ id: number }[]>
+  oldConfigKeys?: () => Promise<{ id: number }[]>
   createStack: (name: string) => Promise<{ Id: number }>
   sleep?: (ms: number) => Promise<void>
 }
@@ -59,7 +63,7 @@ export interface DeployResult {
   warning?: string
 }
 
-// A failed create answer can still mean a created stack: asks Portainer (one call in calls per lookup), then answers the warning when the stack exists, so the deploy is reported done instead of a failure followed by a 409 on the next try. When Portainer itself refused (a status other than a gateway's 502, 503 or 504) one lookup settles it, and onNone runs when it confirms there is no stack. When the answer was lost (network error, timeout, gateway status), Portainer may still be running compose up and saves the stack only after it, so the lookup is repeated lostChecks times waitMs apart, and onNone never runs: keys deleted under a stack saved late leave a container that cannot clone, while a key left over is only clutter. Otherwise rethrows e.
+// A failed create answer can still mean a created stack: asks Portainer (one call in calls per lookup), then answers the warning when the stack exists, so the deploy is reported done instead of a failure followed by a 409 on the next try. When Portainer itself refused (a status other than a gateway's 502, 503 or 504) one lookup settles it, and onNone runs when it confirms there is no stack. When the answer was lost (network error, timeout, gateway status), Portainer may still be running compose up and saves the stack only after it, so the lookup is repeated lostChecks times waitMs apart, and onNone never runs: keys deleted under a stack saved late leave a container that cannot clone, while a key left over is only clutter, deleted by the next deploy of the project. Otherwise rethrows e.
 export async function afterFailedCreate(e: unknown, calls: ApiCall[], findStack: () => Promise<{ Id: number } | null>, onNone?: () => Promise<void>, sleep: (ms: number) => Promise<void> = (ms) => Bun.sleep(ms), lostChecks = 6, waitMs = 5000): Promise<string> {
   // deploy() wraps the create error in a DeployFailure whose own status is the dashboard's answer, so Portainer's status is read from the original
   const status = ((e instanceof DeployFailure ? e.cause : e) as { status?: unknown } | undefined)?.status
@@ -104,6 +108,9 @@ export async function deploy(project: string, repo: string, deps: DeployDeps, co
   if (existing.some((c) => c.name === name)) throw new DeployFailure(409, `Container ${name} already exists`, calls)
   if (await step('GET', '/api/stacks', 200, () => deps.findStack(name))) throw new DeployFailure(409, `Stack ${name} already exists`, calls)
   await step('POST', '/images/create', 200, deps.pullImage)
+  // best effort: a key left over is only clutter, not a reason to fail the deploy
+  if (deps.oldDeployKeys && deps.deleteDeployKey) await deleteKeys(repo, deps.oldDeployKeys, deps.deleteDeployKey, step).catch(() => 0)
+  if (configRepo && deps.oldConfigKeys && deps.deleteConfigKey) await deleteKeys(configRepo, deps.oldConfigKeys, deps.deleteConfigKey, step).catch(() => 0)
   const key = deps.createDeployKey ? await step('POST', `/repos/${repo}/keys`, 201, deps.createDeployKey) : null
   // best effort: the error that got us here is what the user needs to see
   const unkey = async (r: string, id: number, del: (id: number) => Promise<void>) => {

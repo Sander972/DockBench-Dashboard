@@ -194,3 +194,21 @@ test('stack failure deletes both keys when there is a config repo', async () => 
   await expect(deploy('shop', 'octocat/shop', deps, 'octocat/claude-config')).rejects.toMatchObject({ message: 'Portainer create stack returned 500: boom' })
   expect(log).toEqual(['pull', 'key', 'config key', 'unkey 42', 'unconfig 43'])
 })
+
+test('deploy first deletes the keys an earlier failed deploy left under the same title, on both repos', async () => {
+  const { deps, log } = fakes({
+    oldDeployKeys: async () => [{ id: 5 }, { id: 6 }],
+    createConfigKey: async () => { log.push('config key'); return { id: 43 } },
+    deleteConfigKey: async (id) => { log.push(`unconfig ${id}`) },
+    oldConfigKeys: async () => [{ id: 8 }],
+  })
+  const result = await deploy('shop', 'octocat/shop', deps, 'octocat/claude-config')
+  expect(log).toEqual(['pull', 'unkey 5', 'unkey 6', 'unconfig 8', 'key', 'config key', 'create'])
+  expect(result.calls.map((c) => `${c.method} ${c.path} ${c.status}`)).toContain('DELETE /repos/octocat/shop/keys/5 204')
+})
+
+test('a failed lookup of old keys does not stop the deploy', async () => {
+  const { deps, log } = fakes({ oldDeployKeys: async () => { throw new Error('GitHub /repos/octocat/shop/keys returned 500') } })
+  await deploy('shop', 'octocat/shop', deps)
+  expect(log).toEqual(['pull', 'key', 'create'])
+})

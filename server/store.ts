@@ -82,6 +82,13 @@ export function readEvents(dataDir: string, limit = 200, stallMs = 5000): Promis
   }, stallMs)
 }
 
+// time of the last successful fetch or pull per container name, from the whole log (both files) so a fetch older than the newest events still counts; read once per process
+export async function lastFetchTimes(dataDir: string): Promise<Map<string, string>> {
+  const m = new Map<string, string>()
+  for (const e of (await readEvents(dataDir, Infinity)).reverse()) if (e.ok && (e.what === 'Fetched' || e.what === 'Pulled')) m.set(e.target, e.at)
+  return m
+}
+
 // Settings in src/types.ts. /data/settings.json: dashboard-wide defaults that are not secrets. A missing or corrupt file reads as the defaults.
 export interface Settings {
   claudeConfigRepo: string // owner/name of the user's ~/.claude repo, '' for none

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { appendEvent, readAccount, readEvents, readSettings, writeAccount, writeSettings } from './store'
+import { appendEvent, lastFetchTimes, readAccount, readEvents, readSettings, writeAccount, writeSettings } from './store'
 
 test('events come back newest first and limited', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'dockbench-'))
@@ -80,4 +80,28 @@ test('readEvents reads only the tail of a large rotated log, keeping multi-byte 
   expect(events.map((e) => e.target)).toEqual(['new', 'old2999', 'old2998', 'old2997'])
   expect(events.every((e) => e.what === 'Déployé ✓')).toBe(true)
   expect((await readEvents(dir, 5000)).length).toBe(3001)
+})
+
+test('lastFetchTimes finds a fetch older than the newest 200 events, in the rotated file too', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dockbench-fetch-'))
+  const ev = (what: string, target: string, at: string, ok = true) => JSON.stringify({ at, actor: 'octocat', what, target, ok, calls: [] })
+  await Bun.write(join(dir, 'activity.jsonl.1'), [ev('Fetched', 'dockbench-old', 't1'), ev('Pulled', 'dockbench-shop', 't2')].join('\n') + '\n')
+  await Bun.write(join(dir, 'activity.jsonl'), [...Array.from({ length: 300 }, () => ev('Signed in', 'octocat', 't3')), ev('Fetched', 'dockbench-shop', 't4'), ev('Fetched', 'dockbench-old', 't5', false)].join('\n') + '\n')
+  expect(Object.fromEntries(await lastFetchTimes(dir))).toEqual({ 'dockbench-old': 't1', 'dockbench-shop': 't4' })
+})
+
+test('a stalled activity log write holds the next operation for at most its stallMs', async () => {
+  // a FIFO nobody reads: appending to it blocks in open(), like a hung disk
+  const stuck = await mkdtemp(join(tmpdir(), 'dockbench-stall-'))
+  const fifo = join(stuck, 'activity.jsonl')
+  expect(Bun.spawnSync(['mkfifo', fifo]).exitCode).toBe(0)
+  const hung = appendEvent(stuck, { at: 't', actor: 'octocat', what: 'Deployed', target: 'p', ok: true, calls: [] }, 5 * 1024 * 1024, 100)
+  const dir = await mkdtemp(join(tmpdir(), 'dockbench-'))
+  const started = Date.now()
+  expect(await Promise.race([readEvents(dir), Bun.sleep(2000).then(() => 'still waiting')])).toEqual([])
+  expect(Date.now() - started).toBeLessThan(1000)
+  // unblock the hung write so the test leaves no open thread behind
+  const reader = Bun.spawn(['cat', fifo], { stdout: 'ignore' })
+  await hung
+  await reader.exited
 })

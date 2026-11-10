@@ -5,7 +5,7 @@ import { device, HttpError, json } from './http'
 import { createSession, SESSION_TTL_SECONDS, verifySession } from './session'
 import { verifyTotp } from './totp'
 import { authorizeUrl, createDeployKey, deleteDeployKey, exchangeCode, findDeployKeys, fetchRepos, fetchUser, normalizeRepo, noreplyEmail, sameLogin } from './github'
-import { appendEvent, LIMIT_RANGES, readAccount, readEvents, readSettings, writeAccount, writeSettings, type Account, type ActivityEvent, type ApiCall, type Settings } from './store'
+import { appendEvent, lastFetchTimes, LIMIT_RANGES, readAccount, readEvents, readSettings, writeAccount, writeSettings, type Account, type ActivityEvent, type ApiCall, type Settings } from './store'
 import { createSessionRecord, enforceLimit, findAlive, listSessions, parseCookie, revoke, revokeAll, signCookie, touch, type SessionLimits } from './sessions'
 import { createLive } from './live'
 import { containerByName, containerLogs, containerPost, dockerInfo, execRun, imageInspect, inspectContainer, listDockbench, removeContainer, removeVolume, runsEntrypoint, stackVolumes, systemDf, unlessGone } from './docker'
@@ -160,12 +160,7 @@ async function listRepos(token: string) {
 // time of the last successful fetch or pull per container name, seeded from the activity log once, so the 2 s live tick does not reread the whole log for it
 let lastFetch: Map<string, string> | null = null
 async function lastFetches(): Promise<Map<string, string>> {
-  if (!lastFetch) {
-    const m = new Map<string, string>()
-    for (const e of (await readEvents(env.dataDir)).reverse()) if (e.ok && (e.what === 'Fetched' || e.what === 'Pulled')) m.set(e.target, e.at)
-    lastFetch = m
-  }
-  return lastFetch
+  return (lastFetch ??= await lastFetchTimes(env.dataDir))
 }
 
 // action in progress per container id, so every tab sees "Stopping…" and a second action is refused
@@ -1008,7 +1003,9 @@ export const routes = {
           ...(key && {
             createDeployKey: () => createDeployKey(a.token, repo, `dockbench-${project}`, key.publicKey),
             deleteDeployKey: (id: number) => deleteDeployKey(a.token, repo, id),
+            oldDeployKeys: () => findDeployKeys(a.token, repo, `dockbench-${project}`, false),
           }),
+          oldConfigKeys: () => findDeployKeys(a.token, configRepo, `dockbench-${project}`, true),
           createConfigKey: () => createDeployKey(a.token, configRepo, `dockbench-${project}`, configKey!.publicKey, true),
           deleteConfigKey: (id) => deleteDeployKey(a.token, configRepo, id),
           createStack: (name) => createStack(portainer, name, stackEnv({ project, repo, image, sshKey: key?.privateKeyBase64 ?? '', gitUserName, gitUserEmail, installClaude, setupRerun, claudeConfigRepo: configRepo, claudeConfigKey: configKey?.privateKeyBase64 ?? '', vscodeConfig, vscodeSettings: settings.vscodeSettings, cpuset })),
